@@ -14,8 +14,8 @@
 # limitations under the License.
 
 import os
-import sys
-import random
+import yaml
+from yaml.loader import SafeLoader
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -50,27 +50,17 @@ from figaroh.tools.regressor import (
     build_regressor_reduced,
 )
 from figaroh.tools.qrdecomposition import get_baseParams
+from figaroh.identification.parameter import (
+    get_standard_parameters,
+    add_standard_additional_parameters,
+    add_custom_parameters,
+)
 
 # Fallback for config manager and data processor if needed
 try:
-    from ...shared.config_manager import ConfigManager
     from ...shared.data_processing import DataProcessor
 except ImportError:
-    # Create simple fallback classes if shared modules not available
-    class ConfigManager:
-        def __init__(self, config_path):
-            import yaml
-            with open(config_path, 'r') as f:
-                self.config = yaml.safe_load(f)
-        
-        def get_config(self):
-            return self.config
-    
-    class DataProcessor:
-        @staticmethod
-        def load_data_csv(filepath, time_col='time', columns=None):
-            import pandas as pd
-            return pd.read_csv(filepath)
+    print("DataProcessor module not found, using basic data loading methods.")
 
 
 class UR10Calibration(BaseCalibration):
@@ -136,7 +126,6 @@ class UR10Calibration(BaseCalibration):
 class UR10Identification(BaseIdentification):
     """UR10-specific dynamic parameter identification class."""
     
-    @handle_calibration_errors
     def __init__(self, robot, config_file="config/ur10_config.yaml"):
         """Initialize UR10 identification with robot model and configuration.
         
@@ -146,13 +135,6 @@ class UR10Identification(BaseIdentification):
         """
         # Call parent constructor
         super().__init__(robot, config_file)
-        
-        # UR10-specific: Set active joint indices (all joints are active)
-        if "act_idxq" not in self.identif_config:
-            self.identif_config["act_idxq"] = list(range(self.model.nq))
-        if "act_idxv" not in self.identif_config:
-            self.identif_config["act_idxv"] = list(range(self.model.nv))
-        
         print("UR10 Dynamic Identification initialized")
     
     def load_trajectory_data(self):
@@ -166,15 +148,15 @@ class UR10Identification(BaseIdentification):
         
         try:
             # Use DataProcessor for improved data loading
-            q_df = DataProcessor.load_data_csv(
+            q_df = DataProcessor.load_csv_data(
                 "data/identification_q_simulation.csv"
             )
-            tau_df = DataProcessor.load_data_csv(
+            tau_df = DataProcessor.load_csv_data(
                 "data/identification_tau_simulation.csv"
             )
             
-            q_raw = q_df.values  # Convert to numpy array
-            tau_raw = tau_df.values  # Convert to numpy array
+            q_raw = q_df  # Convert to numpy array
+            tau_raw = tau_df  # Convert to numpy array
             
             print(f"Loaded {len(q_raw)} samples from CSV files")
             
@@ -315,7 +297,7 @@ class UR10OptimalCalibration(BaseOptimalCalibration):
 
 class UR10OptimalTrajectory:
     """UR10-specific optimal trajectory generation for dynamic identification."""
-    
+
     def __init__(self, robot, config_file="config/ur10_config.yaml"):
         """Initialize UR10 optimal trajectory with robot model and configuration.
         
@@ -326,54 +308,52 @@ class UR10OptimalTrajectory:
         self.robot = robot
         self.model = robot.model
         self.data = robot.data
-        
+
         # Load configuration
         with open(config_file, "r") as f:
             config = yaml.load(f, Loader=SafeLoader)
-        
+
         self.config = config
         self.identif_data = self.config["identification"]
         self.identif_config = get_identification_param_from_yaml(robot, self.identif_data)
-        
+
         # Trajectory parameters
         self.n_waypoints = 10
         self.trajectory_duration = 10.0
         self.dt = 0.01
-        
+
         print("UR10 Optimal Trajectory initialized")
-    
+
     def generate_base_parameters(self):
         """Generate base parameters for trajectory optimization."""
         # Generate random samples for structural analysis
         q_rand = np.random.uniform(
-            low=-np.pi, high=np.pi, size=(100, self.model.nq)
+            low=-np.pi, high=np.pi, size=(1000, self.model.nq)
         )
         dq_rand = np.random.uniform(
-            low=-1, high=1, size=(100, self.model.nv)
+            low=-10, high=10, size=(1000, self.model.nv)
         )
         ddq_rand = np.random.uniform(
-            low=-1, high=1, size=(100, self.model.nv)
+            low=-10, high=10, size=(1000, self.model.nv)
         )
-        
+
         # Build regressor matrix
         W = build_regressor_basic(self.robot, q_rand, dq_rand, ddq_rand, self.identif_config)
-        
+
         # Create dummy standard parameters
-        num_standard_params = W.shape[1]
-        params_standard = {f"param_{i}": 0.1 for i in range(num_standard_params)}
-        
+        self.standard_parameter = get_standard_parameters(self.model, self.identif_config)
+
         # Remove zero columns and build reduced regressor
-        idx_e, params_r = get_index_eliminate(W, params_standard, 1e-6)
+        idx_e, params_r = get_index_eliminate(W, self.standard_parameter, 1e-6)
         W_e = build_regressor_reduced(W, idx_e)
-        
+
         # Calculate base regressor and base parameters
-        _, params_base, idx_base = get_baseParams(W_e, params_r, params_standard)
-        
+        _, params_base, idx_base = get_baseParams(W_e, params_r, self.standard_parameter)
         self.params_base = params_base
         self.idx_base = idx_base
-        
+
         print(f"Generated {len(params_base)} base parameters")
-    
+
     def cubic_spline_trajectory(self, waypoints, total_time):
         """Generate cubic spline trajectory from waypoints.
         
@@ -385,27 +365,27 @@ class UR10OptimalTrajectory:
             q, dq, ddq: Position, velocity, acceleration trajectories
         """
         from scipy.interpolate import CubicSpline
-        
+
         n_points = int(total_time / self.dt)
         t = np.linspace(0, total_time, len(waypoints))
         t_eval = np.linspace(0, total_time, n_points)
-        
+
         trajectories = []
         velocities = []
         accelerations = []
-        
+
         for joint in range(self.model.nq):
             cs = CubicSpline(t, waypoints[:, joint])
             trajectories.append(cs(t_eval))
             velocities.append(cs(t_eval, nu=1))
             accelerations.append(cs(t_eval, nu=2))
-        
+
         q = np.array(trajectories).T
         dq = np.array(velocities).T
         ddq = np.array(accelerations).T
-        
+
         return q, dq, ddq
-    
+
     def check_constraints(self, q, dq, ddq):
         """Check if trajectory satisfies joint and dynamic constraints.
         
@@ -418,22 +398,22 @@ class UR10OptimalTrajectory:
         # Joint limits (simplified - using conservative limits)
         q_min = -np.pi * np.ones(self.model.nq)
         q_max = np.pi * np.ones(self.model.nq)
-        
+
         if np.any(q < q_min) or np.any(q > q_max):
             return False
-        
+
         # Velocity limits
         dq_max = 2.0 * np.ones(self.model.nv)
         if np.any(np.abs(dq) > dq_max):
             return False
-        
+
         # Acceleration limits
         ddq_max = 5.0 * np.ones(self.model.nv)
         if np.any(np.abs(ddq) > ddq_max):
             return False
-        
+
         return True
-    
+
     def evaluate_trajectory_quality(self, q, dq, ddq):
         """Evaluate the quality of a trajectory for parameter identification.
         
@@ -445,15 +425,19 @@ class UR10OptimalTrajectory:
         """
         # Build regressor matrix for this trajectory
         W = build_regressor_basic(self.robot, q, dq, ddq, self.identif_config)
-        
+
+        # Remove zero columns and build reduced regressor
+        idx_e, params_r = get_index_eliminate(W, self.standard_parameter, 1e-6)
+        W_e = build_regressor_reduced(W, idx_e)
+
         # Select base parameters
-        W_base = W[:, self.idx_base]
-        
+        W_base = W_e[:, self.idx_base]
+
         # Calculate condition number
         cond_num = np.linalg.cond(W_base)
-        
+
         return cond_num
-    
+
     def solve(self, n_iterations=50):
         """Generate optimal trajectory for UR10 identification.
         
@@ -464,30 +448,30 @@ class UR10OptimalTrajectory:
             dict: Optimal trajectory data
         """
         print("Generating optimal trajectory for UR10 identification...")
-        
+
         # Generate base parameters
         self.generate_base_parameters()
-        
+
         best_trajectory = None
         best_condition_number = float('inf')
-        
+
         for i in range(n_iterations):
             # Generate random waypoints within joint limits
             waypoints = np.random.uniform(
                 low=-np.pi, high=np.pi, 
                 size=(self.n_waypoints, self.model.nq)
             )
-            
+
             # Generate trajectory
             q, dq, ddq = self.cubic_spline_trajectory(waypoints, self.trajectory_duration)
-            
+
             # Check constraints
             if not self.check_constraints(q, dq, ddq):
                 continue
-            
+
             # Evaluate quality
             cond_num = self.evaluate_trajectory_quality(q, dq, ddq)
-            
+
             if cond_num < best_condition_number:
                 best_condition_number = cond_num
                 best_trajectory = {
@@ -495,62 +479,62 @@ class UR10OptimalTrajectory:
                     'waypoints': waypoints,
                     'condition_number': cond_num
                 }
-            
+
             if i % 10 == 0:
                 print(f"Iteration {i}: best condition number = {best_condition_number:.2e}")
-        
+
         self.optimal_trajectory = best_trajectory
         print(f"Optimal trajectory found with condition number: {best_condition_number:.2e}")
-        
+
         return best_trajectory
-    
+
     def plot_results(self):
         """Plot optimal trajectory results."""
         if not hasattr(self, 'optimal_trajectory'):
             print("No optimal trajectory results to plot. Run solve() first.")
             return
-        
+
         traj = self.optimal_trajectory
         time_vector = np.arange(len(traj['q'])) * self.dt
-        
+
         # Plot joint trajectories
         fig, axes = plt.subplots(3, 1, figsize=(12, 10))
-        
+
         # Position
         axes[0].plot(time_vector, traj['q'])
         axes[0].set_ylabel('Joint Position (rad)')
         axes[0].set_title('UR10 Optimal Trajectory - Joint Positions')
         axes[0].grid(True)
         axes[0].legend([f'Joint {i+1}' for i in range(self.model.nq)])
-        
+
         # Velocity
         axes[1].plot(time_vector, traj['dq'])
         axes[1].set_ylabel('Joint Velocity (rad/s)')
         axes[1].set_title('Joint Velocities')
         axes[1].grid(True)
-        
+
         # Acceleration
         axes[2].plot(time_vector, traj['ddq'])
         axes[2].set_ylabel('Joint Acceleration (rad/s²)')
         axes[2].set_xlabel('Time (s)')
         axes[2].set_title('Joint Accelerations')
         axes[2].grid(True)
-        
+
         plt.tight_layout()
         plt.show()
-        
+
         print(f"Trajectory condition number: {traj['condition_number']:.2e}")
-    
+
     def save_results(self, output_dir="results"):
         """Save optimal trajectory results."""
         if not hasattr(self, 'optimal_trajectory'):
             print("No optimal trajectory results to save. Run solve() first.")
             return
-        
+
         os.makedirs(output_dir, exist_ok=True)
-        
+
         traj = self.optimal_trajectory
-        
+
         # Save to YAML
         results_dict = {
             'condition_number': float(traj['condition_number']),
@@ -559,10 +543,10 @@ class UR10OptimalTrajectory:
             'n_waypoints': self.n_waypoints,
             'sampling_time': self.dt
         }
-        
+
         with open(os.path.join(output_dir, "ur10_optimal_trajectory.yaml"), "w") as f:
             yaml.dump(results_dict, f, default_flow_style=False)
-        
+
         # Save trajectory data to CSV
         time_vector = np.arange(len(traj['q'])) * self.dt
         df = pd.DataFrame({
@@ -572,5 +556,5 @@ class UR10OptimalTrajectory:
             **{f'ddq{i+1}': traj['ddq'][:, i] for i in range(self.model.nv)},
         })
         df.to_csv(os.path.join(output_dir, "ur10_optimal_trajectory.csv"), index=False)
-        
+
         print(f"Results saved to {output_dir}/ur10_optimal_trajectory.yaml and .csv")
