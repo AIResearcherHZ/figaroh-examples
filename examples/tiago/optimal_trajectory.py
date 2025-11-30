@@ -67,7 +67,7 @@ def main():
     robot = build_tiago_simplified(robot)
 
     # Create trajectory optimizer
-    config_file = "config/tiago_config.yaml"
+    config_file = "config/tiago_unified_config.yaml"
     opt_traj = OptimalTrajectoryIPOPT(robot, active_joints, config_file)
 
     ps = opt_traj.identif_config

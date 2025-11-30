@@ -23,7 +23,6 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from examples.ur10.utils.ur10_tools import (
-    UR10OptimalTrajectory,
     OptimalTrajectoryIPOPT
 )
 from figaroh.tools.robot import load_robot
@@ -49,7 +48,7 @@ def main():
     # Create optimal trajectory object
     ur10_traj = OptimalTrajectoryIPOPT(
         robot=ur10, active_joints=active_joints,
-        config_file="config/ur10_config.yaml"
+        config_file="config/ur10_unified_config.yaml"
     )
     ps = ur10_traj.identif_config
 
@@ -71,19 +70,10 @@ def main():
     if optimal_trajectory is not None:
         # Display results
         print("Optimal trajectory generation completed successfully!")
-        print(f"Final condition number: {optimal_trajectory['condition_number']:.2f}")
-        print(f"Trajectory duration: {ur10_traj.trajectory_duration} seconds")
-
         # Plot and save results
         ur10_traj.plot_results()
-        ur10_traj.save_results("results/")
-
-        print("Optimal trajectory results saved to results/ directory")
     else:
         print("Failed to generate optimal trajectory. Check constraints and parameters.")
-
-    for i, param in enumerate(ur10_traj.params_base):
-        print(f"{i + 1}. {param}")
 
 
 if __name__ == "__main__":
