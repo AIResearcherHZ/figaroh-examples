@@ -13,21 +13,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import sys
-import os
+from pathlib import Path
 
-# Add the parent directory to Python path to enable proper imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Configure logging at application entry point
+logging.basicConfig(
+    level=logging.CRITICAL,
+    format="%(name)s - %(levelname)s - %(message)s",
+)
+
+# Add project root to path for imports (prefer `pip install -e .` instead)
+project_root = Path(__file__).parents[2]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from examples.ur10.utils.ur10_tools import UR10Identification
 from figaroh.tools.robot import load_robot
 
 
 # def main():
-    # """Main function for UR10 dynamic parameter identification."""
+# """Main function for UR10 dynamic parameter identification."""
 
 # Load UR10 robot model
 ur10 = load_robot(

@@ -15,20 +15,19 @@
 
 import logging
 import sys
-import os
+from pathlib import Path
 
 # Configure logging at application entry point
 # Levels: DEBUG < INFO < WARNING < ERROR < CRITICAL
 logging.basicConfig(
-    level=logging.CRITICAL,  # Suppress almost all logging output
+    level=logging.CRITICAL,  # Suppress logging output
     format="%(name)s - %(levelname)s - %(message)s",
 )
 
-# Add the parent directory to Python path to enable proper imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Add project root to path for imports (prefer `pip install -e .` instead)
+project_root = Path(__file__).parents[2]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from examples.ur10.utils.ur10_tools import (
     OptimalTrajectoryIPOPT

@@ -22,14 +22,20 @@ This script demonstrates calibration of the TALOS humanoid robot's
 torso-arm kinematic chain using experimental data.
 """
 
-import os
+import logging
 import sys
+from pathlib import Path
 
-# Add the parent directory to Python path to enable proper imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Configure logging at application entry point
+logging.basicConfig(
+    level=logging.CRITICAL,
+    format="%(name)s - %(levelname)s - %(message)s",
+)
+
+# Add project root to path for imports (prefer `pip install -e .` instead)
+project_root = Path(__file__).parents[2]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from figaroh.tools.robot import load_robot
 from examples.talos.utils.talos_tools import TALOSCalibration
@@ -85,7 +91,7 @@ def main(data_type="experimental", visualization=True, verbose=True):
     print(f"\nCalibration parameters ({param_count} total):")
     for i, param_name in enumerate(calibration.calib_config['param_name']):
         print(f"  {i:2d}: {param_name}")
-    
+
 
 if __name__ == "__main__":
     try:
