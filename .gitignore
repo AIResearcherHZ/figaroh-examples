@@ -61,6 +61,8 @@ logs/
 *.hdf5
 
 # Temporary files
+shared/
+examples/shared/
 tmp/
 temp/
 *.tmp
