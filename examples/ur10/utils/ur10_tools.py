@@ -62,7 +62,7 @@ from figaroh.optimal.base_optimal_trajectory import (
 
 # Fallback for config manager and data processor if needed
 try:
-    from ...shared.data_processing import DataProcessor
+    from .data_processing import DataProcessor
 except ImportError:
     print("DataProcessor module not found, using basic data loading methods.")
 
