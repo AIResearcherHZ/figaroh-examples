@@ -2,6 +2,10 @@
 
 This project provides a modern web interface for robotics calibration and identification using the Figaroh framework. The interface allows users to load robot models, configure parameters, execute tasks, and visualize results in an interactive 3D environment using Viser.
 
+> ⚠️ Under development
+>
+> This web interface is actively evolving. Expect breaking changes, incomplete features, and limited backward compatibility between commits.
+
 ## Project Structure
 
 The project is organized into several directories and files:
