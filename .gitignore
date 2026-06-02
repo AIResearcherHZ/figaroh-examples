@@ -35,6 +35,8 @@ venv.bak/
 *.swp
 *.swo
 *~
+.github/
+.waylog/
 
 # OS
 .DS_Store
