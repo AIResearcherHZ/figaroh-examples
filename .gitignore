@@ -62,6 +62,14 @@ logs/
 *.h5
 *.hdf5
 
+# CodeGraph index
+.codegraph/
+
+# Generated calibration outputs
+examples/talos/data/calibration_results.npz
+examples/talos/data/offset.xacro
+examples/talos/data/offset.yaml
+
 # Temporary files
 shared/
 examples/shared/
