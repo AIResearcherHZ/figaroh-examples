@@ -99,8 +99,10 @@ class TALOSCalibration(BaseCalibration):
             self.model, self.data, var, self.q_measured, self.calib_config
         )
 
-        # Main residual: difference between measured and estimated poses
-        main_residuals = self.PEE_measured - PEEe
+        # Main residual: SE3 log map (geometrically correct pose error)
+        main_residuals = self._compute_logmap_residuals(
+            self.PEE_measured, PEEe
+        )
 
         # TALOS-specific regularization
         # Exclude base position (first 3 params) and markers (last 3*NbMarkers)

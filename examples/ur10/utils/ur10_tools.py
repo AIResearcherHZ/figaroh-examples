@@ -111,8 +111,10 @@ class UR10Calibration(BaseCalibration):
             self.model, self.data, var, self.q_measured, self.calib_config
         )
 
-        # Main residual: difference between measured and estimated poses
-        raw_residuals = self.PEE_measured - PEEe
+        # Main residual: SE3 log map (geometrically correct pose error)
+        raw_residuals = self._compute_logmap_residuals(
+            self.PEE_measured, PEEe
+        )
 
         # Apply unit-aware weighting using BaseCalibration utility method
         # This handles position (meters) vs orientation (radians) properly
