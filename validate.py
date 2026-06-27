@@ -28,22 +28,25 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 
 # Example scripts to validate, grouped by robot.
-# Each entry: (script_name, timeout_seconds, is_slow)
+# Each entry: (script_name, timeout_seconds, is_slow, [extra_args])
+#   extra_args is an optional list of CLI flags to pass to the script.
 EXAMPLE_SCRIPTS = {
     "ur10": [
-        ("calibration.py", 120, False),
+        ("calibration.py", 120, False, ["--calibrate-only", "--no-plot"]),
+        ("update_model.py", 120, False),
         ("identification.py", 120, False),
         ("optimal_config.py", 600, True),
         ("optimal_trajectory.py", 600, True),
     ],
     "tiago": [
-        ("calibration.py", 120, False),
+        ("calibration.py", 120, False, ["--calibrate-only", "--no-plot"]),
+        ("update_model.py", 120, False),
         ("identification.py", 120, False),
         ("optimal_config.py", 120, False),
         ("optimal_trajectory.py", 600, True),
     ],
     "talos": [
-        ("calibration_upperbody.py", 120, False),
+        ("calibration_upperbody.py", 120, False, ["--calibrate-only", "--no-plot"]),
         ("update_model.py", 120, False),
     ],
     "staubli_tx40": [
@@ -144,7 +147,7 @@ def run_pytest():
     return result
 
 
-def run_example_script(robot, script, timeout, is_slow, quick=False):
+def run_example_script(robot, script, timeout, is_slow, quick=False, extra_args=None):
     """Run a single example script from its robot directory."""
     if quick and is_slow:
         r = Result(f"{robot}/{script}", "script")
@@ -165,8 +168,12 @@ def run_example_script(robot, script, timeout, is_slow, quick=False):
     print(f"\n  Running {robot}/{script} ...")
     start = time.time()
 
+    cmd = [sys.executable, script]
+    if extra_args:
+        cmd.extend(extra_args)
+
     rc, stdout, stderr, timed_out = run_command(
-        [sys.executable, script],
+        cmd,
         cwd=script_path.parent,
         timeout=timeout,
         env_extra={"MPLBACKEND": "Agg"},  # non-interactive matplotlib
@@ -215,8 +222,13 @@ def run_all_scripts(robots=None, quick=False):
             continue
 
         print(f"\n  --- {robot} ---")
-        for script, timeout, is_slow in EXAMPLE_SCRIPTS[robot]:
-            r = run_example_script(robot, script, timeout, is_slow, quick)
+        for entry in EXAMPLE_SCRIPTS[robot]:
+            if len(entry) == 4:
+                script, timeout, is_slow, extra_args = entry
+            else:
+                script, timeout, is_slow = entry
+                extra_args = []
+            r = run_example_script(robot, script, timeout, is_slow, quick, extra_args)
             results.append(r)
 
     return results
