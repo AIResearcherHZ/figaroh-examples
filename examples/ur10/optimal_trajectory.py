@@ -51,6 +51,46 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def save_trajectory_csv(
+    results: dict, out_dir: str = "results", name: str = "ur10_optimal_trajectory"
+) -> str:
+    """把最优轨迹结果保存为 CSV(时间 + 各关节 q/dq/ddq)。
+
+    不使用库自带 save_results():其 ResultsManager 相对导入有误,会回退成
+    只存摘要、丢失轨迹数据。这里直接落盘完整的关节轨迹供后续识别使用。
+
+    Args:
+        results: solve() 返回的结果字典,含 T_F/P_F/V_F/A_F 段列表。
+        out_dir: 输出目录。
+        name: 输出文件名(不含扩展名)。
+
+    Returns:
+        保存的 CSV 路径。
+    """
+    import os
+
+    import numpy as np
+    import pandas as pd
+
+    os.makedirs(out_dir, exist_ok=True)
+    frames = []
+    for si, (T, P, V, A) in enumerate(
+        zip(results["T_F"], results["P_F"], results["V_F"], results["A_F"])
+    ):
+        d = {"segment": si, "time": np.asarray(T).reshape(-1)}
+        for j in range(P.shape[1]):
+            d[f"q{j + 1}"] = P[:, j]
+        for j in range(V.shape[1]):
+            d[f"dq{j + 1}"] = V[:, j]
+            d[f"ddq{j + 1}"] = A[:, j]
+        frames.append(pd.DataFrame(d))
+    df = pd.concat(frames, ignore_index=True)
+    csv_path = os.path.join(out_dir, f"{name}.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"轨迹已保存: {csv_path}  ({len(df)} 采样点)")
+    return csv_path
+
+
 def main(args: argparse.Namespace) -> None:
     """Main function for UR10 optimal trajectory generation."""
     # 切换到脚本所在目录,保证相对路径能找到
@@ -101,10 +141,12 @@ def main(args: argparse.Namespace) -> None:
         # Generate optimal trajectory
         optimal_trajectory = ur10_traj.solve(stack_reps=2)
 
-        if optimal_trajectory is not None:
+        if optimal_trajectory is not None and optimal_trajectory.get("T_F"):
             # Display results
             print("Optimal trajectory generation completed successfully!")
-            # Plot and save results
+            # 默认保存完整轨迹(时间 + 各关节 q/dq/ddq)到 CSV,供后续识别使用
+            save_trajectory_csv(optimal_trajectory)
+            # Plot results
             ur10_traj.plot_results()
         else:
             print(

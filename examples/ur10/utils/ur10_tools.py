@@ -60,6 +60,10 @@ from figaroh.optimal.base_optimal_trajectory import (
     BaseTrajectoryIPOPTProblem,
 )
 
+# 对 figaroh 最优轨迹热点打运行时性能补丁
+# (高效逆动力学 + 向量化、不刷屏的约束筛查)。
+from . import _perf_patches  # noqa: F401
+
 # Fallback for config manager and data processor if needed
 try:
     from .data_processing import DataProcessor

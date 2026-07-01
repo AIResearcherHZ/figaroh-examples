@@ -1,0 +1,46 @@
+<mujoco model="ur10">
+  <compiler angle="radian" autolimits="true"/>
+  <option integrator="implicitfast" gravity="0 0 -9.81"/>
+  <default>
+    <geom contype="0" conaffinity="0"/>
+  </default>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+    <material name="ur" rgba="0.7 0.7 0.72 1"/>
+    <mesh name="base" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/base.stl"/>
+    <mesh name="shoulder" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/shoulder.stl"/>
+    <mesh name="upperarm" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/upperarm.stl"/>
+    <mesh name="forearm" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/forearm.stl"/>
+    <mesh name="wrist1" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/wrist1.stl"/>
+    <mesh name="wrist2" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/wrist2.stl"/>
+    <mesh name="wrist3" file="/home/xhz/figaroh-examples/models/ur_description/meshes/ur10/collision/wrist3.stl"/>
+  </asset>
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1"/>
+    <geom type="mesh" mesh="base" material="ur"/>
+    <body name="shoulder_pan_joint" pos="0 0 0.1273" quat="1 0 0 0">
+      <joint name="shoulder_pan_joint" type="hinge" axis="0 0 1" range="-6.28319 6.28319"/>
+      <geom type="mesh" mesh="shoulder" material="ur"/>
+      <body name="shoulder_lift_joint" pos="0 0.220941 0" quat="0.707106781 0 0.707106781 0">
+        <joint name="shoulder_lift_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319"/>
+        <geom type="mesh" mesh="upperarm" material="ur"/>
+        <body name="elbow_joint" pos="0 -0.1719 0.612" quat="1 0 0 0">
+          <joint name="elbow_joint" type="hinge" axis="0 1 0" range="-3.14159 3.14159"/>
+          <geom type="mesh" mesh="forearm" material="ur"/>
+          <body name="wrist_1_joint" pos="0 0 0.5723" quat="0.707106781 0 0.707106781 0">
+            <joint name="wrist_1_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319"/>
+            <geom type="mesh" mesh="wrist1" material="ur"/>
+            <body name="wrist_2_joint" pos="0 0.1149 0" quat="1 0 0 0">
+              <joint name="wrist_2_joint" type="hinge" axis="0 0 1" range="-6.28319 6.28319"/>
+              <geom type="mesh" mesh="wrist2" material="ur"/>
+              <body name="wrist_3_joint" pos="0 0 0.1157" quat="1 0 0 0">
+                <joint name="wrist_3_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319"/>
+                <geom type="mesh" mesh="wrist3" material="ur"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

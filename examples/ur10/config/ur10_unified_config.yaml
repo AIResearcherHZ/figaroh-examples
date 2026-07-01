@@ -109,13 +109,17 @@ tasks:
     enabled: true
 
     problem:
-      soft_lim: 0.1     # joint limit discount (increased from 0.05)
-      max_attempts: 500 # maximum attempts to find feasible trajectory
+      soft_lim: 0.4     # 限位折扣;收缩采样范围。0.4 时可行性搜索首次即成功;
+                        # 调小激励更丰富但重试更多
+      max_attempts: 500 # 可行轨迹最大尝试次数
 
     trajectory:
-      waypoints: 7       # number of waypoints (reduced from 5)
-      frequency: 100     # frequency in Hz (reduced from 100)
-      segment_duration: 2.0 # window time between waypoints (reduced from 2)
+      waypoints: 5       # 路点数量
+      frequency: 50      # 约束/激励采样频率(Hz);IPOPT 约束数 = Ns×12,
+                         # 而耗时主要来自 IPOPT 处理这些约束的内部线性代数,
+                         # 故降此值是最有效的提速手段。10Hz 对 2s 段仍够密
+      segment_duration: 2.0 # 路点间时间窗;配合 soft_lim=0.4 仍可行,且比 3.0
+                            # 采样点更少、条件数更好
 
     constraints:
       velocity_scaling: 0.5
