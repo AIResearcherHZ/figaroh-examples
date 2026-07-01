@@ -81,6 +81,9 @@ def plot_condition_number_evolution(results: dict) -> None:
 
 def main() -> dict | None:
     """Main function for TIAGo optimal trajectory generation."""
+    # 切换到脚本所在目录,保证相对路径能找到
+    import os
+    os.chdir(Path(__file__).resolve().parent)
     args = parse_args()
 
     # Configure logging after parsing args

@@ -31,7 +31,7 @@ project_root = Path(__file__).parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from examples.staubli_tx40.utils.staubli_tx40_tools import TX40Identification
+from examples.staubli_TX40.utils.staubli_tx40_tools import TX40Identification
 from figaroh.tools.robot import load_robot
 
 
@@ -67,6 +67,9 @@ def main(args: argparse.Namespace) -> None:
     Args:
         args: Parsed command-line arguments
     """
+    # 切换到脚本所在目录,保证相对路径能找到
+    import os
+    os.chdir(Path(__file__).resolve().parent)
     # Validate input files exist
     urdf_path = Path(args.urdf)
     if not urdf_path.exists():

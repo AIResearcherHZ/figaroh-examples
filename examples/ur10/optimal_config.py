@@ -63,6 +63,9 @@ def parse_args() -> argparse.Namespace:
 
 def main(args: argparse.Namespace) -> None:
     """Main function for UR10 optimal configuration generation."""
+    # 切换到脚本所在目录,保证相对路径能找到
+    import os
+    os.chdir(Path(__file__).resolve().parent)
     # Validate input files
     urdf_path = Path(args.urdf)
     if not urdf_path.exists():

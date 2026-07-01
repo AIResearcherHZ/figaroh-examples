@@ -58,6 +58,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> TiagoIdentification | None:
     """Main function for Tiago dynamic parameter identification."""
+    # 切换到脚本所在目录,保证相对路径能找到
+    import os
+    os.chdir(Path(__file__).resolve().parent)
     args = parse_args()
 
     # Configure logging after parsing args

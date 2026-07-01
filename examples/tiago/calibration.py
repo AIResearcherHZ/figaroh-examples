@@ -511,6 +511,9 @@ def _run_viz_validation(args: argparse.Namespace) -> None:
 
 def main() -> None:
     """Run the full calibration → export → verify → visualise pipeline."""
+    # 切换到脚本所在目录,保证相对路径能找到
+    import os
+    os.chdir(Path(__file__).resolve().parent)
     args = parse_args()
 
     logging.basicConfig(
