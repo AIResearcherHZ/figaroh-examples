@@ -13,12 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-UR10 Optimal Configuration Generation Script
-
-Generates optimal robot configurations for kinematic calibration using
-D-optimal experimental design with the refactored UR10OptimalCalibration class.
-"""
 
 from __future__ import annotations
 
@@ -29,7 +23,6 @@ import time
 import numpy as np
 from pathlib import Path
 
-# Add project root to path for imports (prefer `pip install -e .` instead)
 project_root = Path(__file__).parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -39,7 +32,6 @@ from figaroh.tools.robot import load_robot
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="UR10 optimal configuration generation"
     )
@@ -62,11 +54,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace) -> None:
-    """Main function for UR10 optimal configuration generation."""
-    # 切换到脚本所在目录,保证相对路径能找到
     import os
     os.chdir(Path(__file__).resolve().parent)
-    # Validate input files
     urdf_path = Path(args.urdf)
     if not urdf_path.exists():
         print(f"Error: URDF file not found: {urdf_path}", file=sys.stderr)
@@ -81,7 +70,6 @@ def main(args: argparse.Namespace) -> None:
         print("UR10 Optimal Configuration Generation")
         print("=" * 50)
 
-        # 1. Load robot model
         print("\n1. Loading UR10 robot model...")
         robot = load_robot(
             args.urdf,
@@ -89,14 +77,12 @@ def main(args: argparse.Namespace) -> None:
             load_by_urdf=True,
         )
 
-        # 2. Create optimal calibration instance
         print("\n2. Setting up optimal calibration...")
         opt_calib = UR10OptimalCalibration(robot, args.config)
 
         print(f"Calibration model: {opt_calib.calib_config['calib_model']}")
         print(f"Minimum configurations required: {opt_calib.minNbChosen}")
 
-        # 3. Solve optimal configuration problem
         print("\n3. Solving optimal configuration selection...")
 
         start_time = time.time()
@@ -105,7 +91,6 @@ def main(args: argparse.Namespace) -> None:
 
         print(f"Optimization completed in {solve_time:.2f} seconds")
 
-        # 4. Display results
         print("\n4. Results Summary:")
 
         if (
@@ -120,7 +105,6 @@ def main(args: argparse.Namespace) -> None:
             ratio = len(selected_configs) / opt_calib.calib_config["NbSample"]
             print(f"Selection ratio: {ratio:.2%}")
 
-        # 5. Show optimization quality
         if hasattr(opt_calib, "detroot_whole"):
             print(f"Information matrix determinant root: {opt_calib.detroot_whole:.4e}")
 

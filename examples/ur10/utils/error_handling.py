@@ -1,10 +1,3 @@
-"""
-Custom exceptions and error handling for FIGAROH examples.
-
-This module provides standardized error handling and validation
-utilities for robot identification and calibration workflows.
-"""
-
 import functools
 import logging
 from typing import Any, Callable, Dict, Optional, TypeVar, Union
@@ -12,68 +5,48 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Type variable for decorators
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-# Custom Exception Classes
 class FigarohExampleError(Exception):
-    """Base exception for FIGAROH examples."""
 
     pass
 
 
 class RobotInitializationError(FigarohExampleError):
-    """Exception raised when robot initialization fails."""
 
     pass
 
 
 class ConfigurationError(FigarohExampleError):
-    """Exception raised for configuration-related issues."""
 
     pass
 
 
 class DataProcessingError(FigarohExampleError):
-    """Exception raised during data processing operations."""
 
     pass
 
 
 class CalibrationError(FigarohExampleError):
-    """Exception raised during calibration procedures."""
 
     pass
 
 
 class IdentificationError(FigarohExampleError):
-    """Exception raised during identification procedures."""
 
     pass
 
 
 class ValidationError(FigarohExampleError):
-    """Exception raised when validation fails."""
 
     pass
 
 
-# Validation Functions
 def validate_robot_config(config: Dict[str, Any]) -> None:
-    """
-    Validate robot configuration dictionary.
-
-    Args:
-        config: Configuration dictionary to validate
-
-    Raises:
-        ValidationError: If configuration is invalid
-    """
     if not isinstance(config, dict):
         raise ValidationError("Configuration must be a dictionary")
 
-    # Check for required fields
     required_fields = ["robot_name"]
     missing_fields = [field for field in required_fields if field not in config]
 
@@ -87,18 +60,6 @@ def validate_trajectory_data(
     qdd: Optional[np.ndarray] = None,
     tau: Optional[np.ndarray] = None,
 ) -> None:
-    """
-    Validate trajectory data arrays.
-
-    Args:
-        q: Joint positions
-        qd: Joint velocities (optional)
-        qdd: Joint accelerations (optional)
-        tau: Joint torques (optional)
-
-    Raises:
-        ValidationError: If data is invalid
-    """
     if not isinstance(q, np.ndarray):
         raise ValidationError("Joint positions must be numpy array")
 
@@ -107,7 +68,6 @@ def validate_trajectory_data(
 
     n_samples, n_joints = q.shape
 
-    # Validate other arrays if provided
     arrays_to_check = [("velocities", qd), ("accelerations", qdd), ("torques", tau)]
 
     for name, array in arrays_to_check:
@@ -134,18 +94,6 @@ def validate_numeric_range(
     max_val: Optional[float] = None,
     name: str = "value",
 ) -> None:
-    """
-    Validate that numeric value(s) are within specified range.
-
-    Args:
-        value: Value or array to validate
-        min_val: Minimum allowed value
-        max_val: Maximum allowed value
-        name: Name of the value for error messages
-
-    Raises:
-        ValidationError: If value is out of range
-    """
     if isinstance(value, np.ndarray):
         if min_val is not None and np.any(value < min_val):
             raise ValidationError(f"{name} contains values below {min_val}")
@@ -160,17 +108,7 @@ def validate_numeric_range(
             raise ValidationError(f"{name} {value} is above maximum {max_val}")
 
 
-# Decorator Functions
 def validate_robot_initialization(func: F) -> F:
-    """
-    Decorator to validate robot initialization.
-
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function with robot validation
-    """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -183,20 +121,10 @@ def validate_robot_initialization(func: F) -> F:
 
 
 def validate_input_data(func: F) -> F:
-    """
-    Decorator to validate input data for processing functions.
-
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function with input validation
-    """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
-            # Basic validation - can be extended based on function signature
             for arg in args:
                 if isinstance(arg, np.ndarray):
                     if np.any(np.isnan(arg)):
@@ -214,15 +142,6 @@ def validate_input_data(func: F) -> F:
 
 
 def handle_calibration_errors(func: F) -> F:
-    """
-    Decorator to handle calibration-specific errors.
-
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function with calibration error handling
-    """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -238,15 +157,6 @@ def handle_calibration_errors(func: F) -> F:
 
 
 def handle_identification_errors(func: F) -> F:
-    """
-    Decorator to handle identification-specific errors.
-
-    Args:
-        func: Function to decorate
-
-    Returns:
-        Decorated function with identification error handling
-    """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -262,17 +172,6 @@ def handle_identification_errors(func: F) -> F:
 
 
 def safe_execute(func: F, *args, **kwargs) -> tuple:
-    """
-    Safely execute a function and return (success, result_or_error).
-
-    Args:
-        func: Function to execute
-        *args: Positional arguments for the function
-        **kwargs: Keyword arguments for the function
-
-    Returns:
-        Tuple of (success_flag, result_or_exception)
-    """
     try:
         result = func(*args, **kwargs)
         return True, result
@@ -281,38 +180,23 @@ def safe_execute(func: F, *args, **kwargs) -> tuple:
         return False, e
 
 
-# Logging Utilities
 def setup_example_logging(
     log_level: str = "INFO", log_file: Optional[str] = None
 ) -> logging.Logger:
-    """
-    Setup logging for FIGAROH examples.
-
-    Args:
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
-        log_file: Optional log file path
-
-    Returns:
-        Configured logger instance
-    """
     logger = logging.getLogger("figaroh_examples")
     logger.setLevel(getattr(logging, log_level.upper()))
 
-    # Remove existing handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
 
-    # Create formatter
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # File handler if specified
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
@@ -321,9 +205,7 @@ def setup_example_logging(
     return logger
 
 
-# Context Managers
 class ErrorContext:
-    """Context manager for structured error handling."""
 
     def __init__(self, operation_name: str, raise_on_error: bool = True):
         self.operation_name = operation_name
@@ -341,9 +223,9 @@ class ErrorContext:
             self.error = exc_val
 
             if self.raise_on_error:
-                return False  # Re-raise the exception
+                return False
             else:
-                return True  # Suppress the exception
+                return True
         else:
             logger.info(f"{self.operation_name} completed successfully")
             return True

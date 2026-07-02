@@ -21,7 +21,6 @@ import sys
 import yaml
 from pathlib import Path
 
-# Add project root to path for imports (prefer `pip install -e .` instead)
 project_root = Path(__file__).parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -31,7 +30,6 @@ from figaroh.tools.robot import load_robot
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="UR10 optimal trajectory generation")
     parser.add_argument(
         "--config",
@@ -54,19 +52,6 @@ def parse_args() -> argparse.Namespace:
 def save_trajectory_csv(
     results: dict, out_dir: str = "results", name: str = "ur10_optimal_trajectory"
 ) -> str:
-    """把最优轨迹结果保存为 CSV(时间 + 各关节 q/dq/ddq)。
-
-    不使用库自带 save_results():其 ResultsManager 相对导入有误,会回退成
-    只存摘要、丢失轨迹数据。这里直接落盘完整的关节轨迹供后续识别使用。
-
-    Args:
-        results: solve() 返回的结果字典,含 T_F/P_F/V_F/A_F 段列表。
-        out_dir: 输出目录。
-        name: 输出文件名(不含扩展名)。
-
-    Returns:
-        保存的 CSV 路径。
-    """
     import os
 
     import numpy as np
@@ -92,11 +77,8 @@ def save_trajectory_csv(
 
 
 def main(args: argparse.Namespace) -> None:
-    """Main function for UR10 optimal trajectory generation."""
-    # 切换到脚本所在目录,保证相对路径能找到
     import os
     os.chdir(Path(__file__).resolve().parent)
-    # Validate input files
     urdf_path = Path(args.urdf)
     if not urdf_path.exists():
         print(f"Error: URDF file not found: {urdf_path}", file=sys.stderr)
@@ -108,19 +90,16 @@ def main(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     try:
-        # Load UR10 robot model
         ur10 = load_robot(
             args.urdf,
             package_dirs="../../models",
             load_by_urdf=True,
         )
 
-        # Load active joints from unified config (eliminates DRY with config)
         with open(args.config) as f:
             cfg = yaml.safe_load(f)
         active_joints = cfg["robot"]["properties"]["joints"]["active_joints"]
 
-        # Create optimal trajectory object
         ur10_traj = OptimalTrajectoryIPOPT(
             robot=ur10,
             active_joints=active_joints,
@@ -128,25 +107,19 @@ def main(args: argparse.Namespace) -> None:
         )
         ps = ur10_traj.identif_config
 
-        # Joint parameters
         ps["active_joints"] = active_joints
         ps["act_Jid"] = [ur10_traj.model.getJointId(i) for i in ps["active_joints"]]
         ps["act_J"] = [ur10_traj.model.joints[jid] for jid in ps["act_Jid"]]
         ps["act_idxq"] = [J.idx_q for J in ps["act_J"]]
         ps["act_idxv"] = [J.idx_v for J in ps["act_J"]]
 
-        # Initialize
         ur10_traj.initialize()
 
-        # Generate optimal trajectory
         optimal_trajectory = ur10_traj.solve(stack_reps=2)
 
         if optimal_trajectory is not None and optimal_trajectory.get("T_F"):
-            # Display results
             print("Optimal trajectory generation completed successfully!")
-            # 默认保存完整轨迹(时间 + 各关节 q/dq/ddq)到 CSV,供后续识别使用
             save_trajectory_csv(optimal_trajectory)
-            # Plot results
             ur10_traj.plot_results()
         else:
             print(

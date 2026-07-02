@@ -5,8 +5,6 @@
 # you may not use this file except in compliance with the License.
 # See http://www.apache.org/licenses/LICENSE-2.0
 
-"""figaroh 最优轨迹热点的运行时性能补丁。
-"""
 
 from __future__ import annotations
 
@@ -17,7 +15,6 @@ import figaroh.utils.cubic_spline as _cs
 
 
 def _fast_calc_torque(N, robot, q, v, a):
-    """逆动力学:每个采样点只调用一次 RNEA。"""
     tau = np.zeros(robot.model.nv * N)
     for i in range(N):
         tau_i = pin.rnea(robot.model, robot.data, q[i, :], v[i, :], a[i, :])
@@ -27,10 +24,8 @@ def _fast_calc_torque(N, robot, q, v, a):
 
 
 def _fast_check_cfg_constraints(self, q, v=None, tau=None, soft_lim=0):
-    """可行性判断:越界返回 True,否则 False;越界仅 DEBUG 打印。"""
     m = self.rmodel
 
-    # 位置限位
     for j in self.act_idxq:
         delta = soft_lim * abs(m.upperPositionLimit[j] - m.lowerPositionLimit[j])
         if np.any(q[:, j] > m.upperPositionLimit[j] - delta) or np.any(
@@ -40,7 +35,6 @@ def _fast_check_cfg_constraints(self, q, v=None, tau=None, soft_lim=0):
             _cs.logger.debug("FAILED to generate a feasible cubic spline")
             return True
 
-    # 速度限位
     if v is not None:
         for j in self.act_idxv:
             if np.any(np.abs(v[:, j]) > (1 - soft_lim) * abs(m.velocityLimit[j])):
@@ -48,7 +42,6 @@ def _fast_check_cfg_constraints(self, q, v=None, tau=None, soft_lim=0):
                 _cs.logger.debug("FAILED to generate a feasible cubic spline")
                 return True
 
-    # 力矩限位
     if tau is not None:
         for j in self.act_idxv:
             if np.any(np.abs(tau[:, j]) > (1 - soft_lim) * abs(m.effortLimit[j])):
@@ -62,13 +55,10 @@ def _fast_check_cfg_constraints(self, q, v=None, tau=None, soft_lim=0):
     return False
 
 
-# IPOPT 迭代上限(原库内为 200)。轨迹优化通常几十次后条件数改善很小,
-# 降低上限可明显提速且对结果影响很小。仅作用于轨迹问题。
 _TRAJ_MAX_ITERS = 50
 
 
 def _patch_ipopt_iterations() -> None:
-    """限制轨迹 IPOPT 的最大迭代数(只对 BaseTrajectoryIPOPTProblem 生效)。"""
     from figaroh.tools.robotipopt import RobotIPOPTSolver
     from figaroh.optimal.base_optimal_trajectory import BaseTrajectoryIPOPTProblem
 
@@ -78,7 +68,6 @@ def _patch_ipopt_iterations() -> None:
 
     def _init(self, problem, config=None):
         _orig_init(self, problem, config)
-        # 仅在轨迹优化问题上收紧迭代上限,其他用途(标定等)不动
         if isinstance(problem, BaseTrajectoryIPOPTProblem) and self.config is not None:
             if self.config.max_iterations > _TRAJ_MAX_ITERS:
                 self.config.max_iterations = _TRAJ_MAX_ITERS
@@ -87,30 +76,74 @@ def _patch_ipopt_iterations() -> None:
     RobotIPOPTSolver._maxiter_patched = True
 
 
+def _get_standard_parameters_fixed(model, identif_config=None):
+    inertial_params = [
+        "m", "mx", "my", "mz",
+        "Ixx", "Ixy", "Iyy", "Ixz", "Iyz", "Izz",
+    ]
+
+    params: list = []
+    phi: list = []
+    assert len(model.inertias) == model.njoints, \
+        "Inertia count mismatch with joints"
+    for jid in range(1, model.njoints):
+        jname = model.names[jid]
+        pinocchio_params = model.inertias[jid].toDynamicParameters()
+        for param_name in inertial_params:
+            params.append(f"{param_name}_{jname}")
+        phi.extend(pinocchio_params)
+
+    return dict(zip(params, phi))
+
+
+def _patch_standard_parameters() -> None:
+    import importlib
+
+    import figaroh.identification.parameter as _param
+
+    if getattr(_param.get_standard_parameters, "_offbyone_fixed", False):
+        return
+    _get_standard_parameters_fixed._offbyone_fixed = True
+
+    _param.get_standard_parameters = _get_standard_parameters_fixed
+    for mod_name in (
+        "figaroh.identification.identification_tools",
+        "figaroh.identification.base_identification",
+        "figaroh.optimal.base_parameter",
+    ):
+        try:
+            mod = importlib.import_module(mod_name)
+            if hasattr(mod, "get_standard_parameters"):
+                mod.get_standard_parameters = _get_standard_parameters_fixed
+        except Exception:
+            pass
+
+
 def apply() -> None:
-    """应用全部运行时补丁(可重复调用)。"""
-    # 补丁类方法(各处通过 self.CB.check_cfg_constraints 调用)。
+    try:
+        _patch_standard_parameters()
+    except Exception:
+        pass
+
     _cs.CubicSpline.check_cfg_constraints = _fast_check_cfg_constraints
 
-    # 定义处和各模块已按名导入的引用都要替换。
     _cs.calc_torque = _fast_calc_torque
     try:
         import figaroh.optimal.base_optimal_trajectory as _bot
 
         _bot.calc_torque = _fast_calc_torque
-    except Exception:  # 防御性处理
+    except Exception:
         pass
     try:
         import figaroh.optimal.contraints as _con
 
         _con.calc_torque = _fast_calc_torque
-    except Exception:  # 防御性处理
+    except Exception:
         pass
 
-    # 收紧轨迹 IPOPT 的迭代上限
     try:
         _patch_ipopt_iterations()
-    except Exception:  # 防御性处理
+    except Exception:
         pass
 
 

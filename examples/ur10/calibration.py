@@ -13,29 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-UR10 calibration, URDF update, and validation — all-in-one entry-point.
-
-Modes::
-
-    # Full pipeline: calibrate → plot → save → export → viser viz
-    python calibration.py
-
-    # Calibrate only (save results with timestamp, skip export)
-    python calibration.py --calibrate-only
-
-    # Load saved results → export URDF → verify FK
-    python calibration.py --update-model
-
-    # Visually validate a previously exported modified URDF
-    python calibration.py --viz-validation
-    python calibration.py --viz-validation --model path/to/modified.urdf
-
-    # Interactive step selection
-    python calibration.py --interactive
-
-Run ``python calibration.py --help`` for all available flags.
-"""
 
 from __future__ import annotations
 
@@ -50,32 +27,26 @@ from pathlib import Path
 
 import numpy as np
 
-# Add project root to path for imports (prefer `pip install -e .` instead)
 project_root = Path(__file__).parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from examples.ur10.utils.ur10_tools import UR10Calibration  # noqa: E402
-from figaroh.tools.robot import load_robot  # noqa: E402
-from figaroh.tools.urdf_exporter import (  # noqa: E402
+from examples.ur10.utils.ur10_tools import UR10Calibration
+from figaroh.tools.robot import load_robot
+from figaroh.tools.urdf_exporter import (
     export_urdf,
     frame_settings_doc,
 )
-from figaroh.tools.export_validation import URDFComparison  # noqa: E402
+from figaroh.tools.export_validation import URDFComparison
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = "data/calibration"
-URDF_STEM = "ur10_robot"  # stem for discovering modified URDFs
-# 默认 MJCF 模型(与 replay_mujoco.py 一致)
+URDF_STEM = "ur10_robot"
 XML_PATH = "../../models/ur_description/ur10.xml"
 
 
-# ── MJCF(XML)导出 ──────────────────────────────────────────────────
-
-
 def _rpy_to_quat(rpy: np.ndarray) -> np.ndarray:
-    """RPY(弧度)转四元数 [w, x, y, z](MuJoCo 顺序)。"""
     r, p, y = rpy
     cr, sr = np.cos(r / 2), np.sin(r / 2)
     cp, sp = np.cos(p / 2), np.sin(p / 2)
@@ -89,7 +60,6 @@ def _rpy_to_quat(rpy: np.ndarray) -> np.ndarray:
 
 
 def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-    """四元数乘法 [w,x,y,z]。"""
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
     return np.array([
@@ -101,7 +71,6 @@ def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
 
 
 def _parse_float(val) -> float:
-    """安全转 float。"""
     try:
         return float(val)
     except (TypeError, ValueError):
@@ -115,27 +84,6 @@ def export_xml(
     output_path: str | None = None,
     verbose: bool = False,
 ) -> str:
-    """把标定/辨识参数写回 MuJoCo MJCF(XML)。
-
-    与 export_urdf 对应,支持以下参数:
-      - 几何偏移(叠加): d_px/d_py/d_pz/d_phix/d_phiy/d_phiz_{joint}
-      - 质量(绝对): m_{body}
-      - 一阶矩(绝对): mx/my/mz_{body} → COM = (mx/m, my/m, mz/m)
-      - 惯量(绝对): Ixx/Ixy/Ixz/Iyy/Iyz/Izz_{body}
-        非对角为零用 diaginertia,否则用 fullinertia
-      - 摩擦(绝对): fv_{joint} → damping, fs_{joint} → frictionloss
-      - 转子惯量(绝对): Ia_{joint} → armature
-      - 测量坐标系参数(base_*, pEE*, phiEE*)不写入 MJCF
-
-    Args:
-        nominal_xml_path: 原始 MJCF 路径。
-        params: {参数名: 值}。
-        output_path: 输出路径,None 则用 <stem>_modified_<时间戳>.xml。
-        verbose: 打印应用了哪些参数。
-
-    Returns:
-        输出 XML 的绝对路径。
-    """
     import xml.etree.ElementTree as ET
 
     nominal = Path(nominal_xml_path)
@@ -149,14 +97,12 @@ def export_xml(
     tree = ET.parse(str(nominal))
     root = tree.getroot()
 
-    # 建立 body name → element 的索引
     body_map: dict[str, ET.Element] = {}
     for body in root.iter("body"):
         name = body.get("name")
         if name:
             body_map[name] = body
 
-    # worldbody 下的第一个 body(base)也可能需要处理
     worldbody = root.find("worldbody")
 
     def _get_body(name: str) -> ET.Element | None:
@@ -174,9 +120,7 @@ def export_xml(
                 return jt
         return None
 
-    # ── 按类别收集参数 ──
-    # 几何偏移(叠加到 body 的 pos/quat)
-    placement: dict[str, list[float]] = {}  # joint → [dx,dy,dz,dphix,dphiy,dphiz]
+    placement: dict[str, list[float]] = {}
     for name, val in params.items():
         for axis, idx in [("d_px", 0), ("d_py", 1), ("d_pz", 2),
                           ("d_phix", 3), ("d_phiy", 4), ("d_phiz", 5)]:
@@ -186,10 +130,9 @@ def export_xml(
                     placement.setdefault(target, [0.0] * 6)[idx] = _parse_float(val)
                 break
 
-    # 惯性参数(绝对): m_, mx_, my_, mz_, Ixx_... Izz_
     mass: dict[str, float] = {}
-    moments: dict[str, list[float]] = {}  # body → [mx, my, mz]
-    inertia: dict[str, np.ndarray] = {}   # body → 3x3 惯量矩阵
+    moments: dict[str, list[float]] = {}
+    inertia: dict[str, np.ndarray] = {}
     for name, val in params.items():
         v = _parse_float(val)
         if name.startswith("m_"):
@@ -216,8 +159,7 @@ def export_xml(
             inertia.setdefault(name[4:], np.zeros((3, 3)))[1, 2] = v
             inertia[name[4:]][2, 1] = v
 
-    # 摩擦/转子惯量(绝对): fv_, fs_, Ia_
-    friction: dict[str, dict] = {}  # joint → {damping, frictionloss, armature}
+    friction: dict[str, dict] = {}
     for name, val in params.items():
         v = _parse_float(val)
         if name.startswith("fv_"):
@@ -229,20 +171,17 @@ def export_xml(
 
     applied = 0
 
-    # ── 应用几何偏移 ──
     for target, deltas in placement.items():
         body = _get_body(target)
         if body is None:
             if verbose:
                 logger.warning("XML body '%s' not found, skipping", target)
             continue
-        # pos 叠加
         cur_pos = [float(x) for x in body.get("pos", "0 0 0").split()]
         while len(cur_pos) < 3:
             cur_pos.append(0.0)
         new_pos = [cur_pos[i] + deltas[i] for i in range(3)]
         body.set("pos", " ".join(_fmt_xml(x) for x in new_pos))
-        # quat 叠加(RPY 增量转四元数后左乘)
         cur_quat = [float(x) for x in body.get("quat", "1 0 0 0").split()]
         while len(cur_quat) < 4:
             cur_quat.extend([0.0] * (4 - len(cur_quat)))
@@ -257,7 +196,6 @@ def export_xml(
         if verbose:
             logger.info("XML body '%s' pos/quat updated", target)
 
-    # ── 应用惯性参数 ──
     all_bodies = set(mass) | set(moments) | set(inertia)
     for bname in all_bodies:
         body = _get_body(bname)
@@ -266,25 +204,36 @@ def export_xml(
                 logger.warning("XML body '%s' not found, skipping", bname)
             continue
         ine = _get_or_create_inertial(body)
+
         m = mass.get(bname)
-        if m is not None:
+        if m is None:
+            m = _parse_float(ine.get("mass", 0.0))
+        else:
             ine.set("mass", _fmt_xml(m))
-        # COM = 一阶矩 / 质量
+
         if bname in moments and m and m != 0:
             mx, my, mz = moments[bname]
-            com = [mx / m, my / m, mz / m]
+            com = np.array([mx / m, my / m, mz / m])
             ine.set("pos", " ".join(_fmt_xml(x) for x in com))
-        # 惯量
+        else:
+            cur = [float(x) for x in ine.get("pos", "0 0 0").split()]
+            while len(cur) < 3:
+                cur.append(0.0)
+            com = np.array(cur[:3])
+
         if bname in inertia:
-            I = inertia[bname]
-            Ixx, Iyy, Izz = I[0, 0], I[1, 1], I[2, 2]
-            Ixy, Ixz, Iyz = I[0, 1], I[0, 2], I[1, 2]
-            if abs(Ixy) < 1e-15 and abs(Ixz) < 1e-15 and abs(Iyz) < 1e-15:
+            I_O = inertia[bname]
+            c = com
+            I_C = I_O - m * (float(c @ c) * np.eye(3) - np.outer(c, c))
+            Ixx, Iyy, Izz = I_C[0, 0], I_C[1, 1], I_C[2, 2]
+            Ixy, Ixz, Iyz = I_C[0, 1], I_C[0, 2], I_C[1, 2]
+            for attr in ("quat", "euler", "axisangle", "xyaxes", "zaxis"):
+                ine.attrib.pop(attr, None)
+            if abs(Ixy) < 1e-12 and abs(Ixz) < 1e-12 and abs(Iyz) < 1e-12:
                 ine.set("diaginertia",
                         " ".join(_fmt_xml(x) for x in [Ixx, Iyy, Izz]))
                 ine.attrib.pop("fullinertia", None)
             else:
-                # MuJoCo fullinertia: Ixx Iyy Izz Ixy Ixz Iyz
                 ine.set("fullinertia",
                         " ".join(_fmt_xml(x)
                                  for x in [Ixx, Iyy, Izz, Ixy, Ixz, Iyz]))
@@ -293,7 +242,6 @@ def export_xml(
         if verbose:
             logger.info("XML body '%s' inertia updated", bname)
 
-    # ── 应用摩擦/转子惯量 ──
     for jname, attrs in friction.items():
         body = _get_body(jname)
         if body is None:
@@ -302,7 +250,6 @@ def export_xml(
             continue
         jt = _get_joint(body, jname)
         if jt is None:
-            # 关节名可能就是 body 名,尝试在 body 内找任意 joint
             joints = body.findall("joint")
             if joints:
                 jt = joints[0]
@@ -324,8 +271,137 @@ def export_xml(
     return str(out.resolve())
 
 
+def export_urdf_dynamics(
+    nominal_urdf_path: str,
+    params: dict,
+    *,
+    output_path: str | None = None,
+    verbose: bool = False,
+) -> str:
+    import xml.etree.ElementTree as ET
+
+    nominal = Path(nominal_urdf_path)
+    if not nominal.exists():
+        raise FileNotFoundError(f"URDF not found: {nominal}")
+    out = Path(output_path) if output_path else nominal
+
+    mass: dict[str, float] = {}
+    moments: dict[str, list[float]] = {}
+    inertia: dict[str, np.ndarray] = {}
+    friction: dict[str, dict] = {}
+    rest: dict = {}
+    for name, val in params.items():
+        v = _parse_float(val)
+        if name.startswith("m_") and not name.startswith(("mx_", "my_", "mz_")):
+            mass[name[2:]] = v
+        elif name.startswith("mx_"):
+            moments.setdefault(name[3:], [0.0, 0.0, 0.0])[0] = v
+        elif name.startswith("my_"):
+            moments.setdefault(name[3:], [0.0, 0.0, 0.0])[1] = v
+        elif name.startswith("mz_"):
+            moments.setdefault(name[3:], [0.0, 0.0, 0.0])[2] = v
+        elif name[:4] in ("Ixx_", "Iyy_", "Izz_", "Ixy_", "Ixz_", "Iyz_"):
+            key, tgt = name[:3], name[4:]
+            I = inertia.setdefault(tgt, np.zeros((3, 3)))
+            r, c = {"Ixx": (0, 0), "Iyy": (1, 1), "Izz": (2, 2),
+                    "Ixy": (0, 1), "Ixz": (0, 2), "Iyz": (1, 2)}[key]
+            I[r, c] = v
+            I[c, r] = v
+        elif name.startswith("fv_"):
+            friction.setdefault(name[3:], {})["damping"] = v
+        elif name.startswith("fs_"):
+            friction.setdefault(name[3:], {})["friction"] = v
+        elif name.startswith("Ia_"):
+            friction.setdefault(name[3:], {})["armature"] = v
+        else:
+            rest[name] = val
+
+    tree = ET.parse(str(nominal))
+    root = tree.getroot()
+
+    links = {lk.get("name"): lk for lk in root.findall(".//link")}
+    joint_child: dict[str, ET.Element] = {}
+    joint_elem: dict[str, ET.Element] = {}
+    for jt in root.findall(".//joint"):
+        jname = jt.get("name")
+        child = jt.find("child")
+        if jname and child is not None:
+            joint_elem[jname] = jt
+            lk = links.get(child.get("link", ""))
+            if lk is not None:
+                joint_child[jname] = lk
+
+    def _get_or_create(parent: ET.Element, tag: str) -> ET.Element:
+        e = parent.find(tag)
+        if e is None:
+            e = ET.SubElement(parent, tag)
+        return e
+
+    applied = 0
+
+    for jname in set(mass) | set(moments) | set(inertia):
+        lk = joint_child.get(jname)
+        if lk is None:
+            logger.warning("URDF joint '%s' (child link) not found, skipping",
+                           jname)
+            continue
+        ine = _get_or_create(lk, "inertial")
+        m_el = _get_or_create(ine, "mass")
+        m = mass.get(jname)
+        if m is None:
+            m = _parse_float(m_el.get("value", 0.0))
+        else:
+            m_el.set("value", _fmt_xml(m))
+
+        origin = _get_or_create(ine, "origin")
+        if jname in moments and m and m != 0:
+            mx, my, mz = moments[jname]
+            com = np.array([mx / m, my / m, mz / m])
+            origin.set("xyz", " ".join(_fmt_xml(x) for x in com))
+        else:
+            cur = [float(x) for x in origin.get("xyz", "0 0 0").split()]
+            while len(cur) < 3:
+                cur.append(0.0)
+            com = np.array(cur[:3])
+
+        if jname in inertia:
+            I_O = inertia[jname]
+            c = com
+            I_C = I_O - m * (float(c @ c) * np.eye(3) - np.outer(c, c))
+            origin.set("rpy", "0 0 0")
+            i_el = _get_or_create(ine, "inertia")
+            i_el.set("ixx", _fmt_xml(I_C[0, 0]))
+            i_el.set("ixy", _fmt_xml(I_C[0, 1]))
+            i_el.set("ixz", _fmt_xml(I_C[0, 2]))
+            i_el.set("iyy", _fmt_xml(I_C[1, 1]))
+            i_el.set("iyz", _fmt_xml(I_C[1, 2]))
+            i_el.set("izz", _fmt_xml(I_C[2, 2]))
+        applied += 1
+        if verbose:
+            logger.info("URDF link '%s' (joint '%s') inertial updated",
+                        lk.get("name"), jname)
+
+    for jname, attrs in friction.items():
+        jt = joint_elem.get(jname)
+        if jt is None:
+            logger.warning("URDF joint '%s' not found, skipping", jname)
+            continue
+        dyn = _get_or_create(jt, "dynamics")
+        for attr, v in attrs.items():
+            dyn.set(attr, _fmt_xml(v))
+        applied += 1
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(str(out), xml_declaration=True, encoding="utf-8")
+    print(f"URDF exported: {out}  ({applied} bodies/joints updated)")
+
+    if rest:
+        export_urdf(str(out), rest, output_path=str(out), verbose=verbose)
+
+    return str(out.resolve())
+
+
 def _fmt_xml(v: float) -> str:
-    """格式化浮点数,紧凑无科学记数法。"""
     if v == 0.0:
         return "0"
     s = f"{v:.10g}"
@@ -334,16 +410,11 @@ def _fmt_xml(v: float) -> str:
     return s
 
 
-# ── Timestamp and file discovery helpers ────────────────────────────
-
-
 def _timestamp_str() -> str:
-    """Return a compact timestamp string for filenames (YYYYMMDD_HHMMSS)."""
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def _discover_npz_files(data_dir: str = DATA_DIR) -> list[Path]:
-    """Return sorted list of calibration .npz files, newest last."""
     files = sorted(Path(data_dir).glob("calibration_results_*.npz"))
     if not files:
         files = sorted(Path("data").glob("calibration_results_*.npz"))
@@ -357,7 +428,6 @@ def _discover_npz_files(data_dir: str = DATA_DIR) -> list[Path]:
 
 
 def _discover_modified_urdf_files(stem: str = URDF_STEM) -> list[Path]:
-    """Return sorted list of modified URDF files, newest last."""
     files = sorted(Path("urdf").glob(f"{stem}_modified_*.urdf"))
     if not files:
         legacy = Path(f"urdf/{stem}_modified.urdf")
@@ -367,7 +437,6 @@ def _discover_modified_urdf_files(stem: str = URDF_STEM) -> list[Path]:
 
 
 def _select_npz(data_dir: str = DATA_DIR) -> str:
-    """Select a calibration .npz file. Interactive if TTY, else latest."""
     files = _discover_npz_files(data_dir)
     if not files:
         print(
@@ -401,7 +470,6 @@ def _select_npz(data_dir: str = DATA_DIR) -> str:
 
 
 def _select_modified_urdf(stem: str = URDF_STEM) -> str:
-    """Select a modified URDF. Interactive if TTY, else latest."""
     files = _discover_modified_urdf_files(stem)
     if not files:
         print(
@@ -428,11 +496,7 @@ def _select_modified_urdf(stem: str = URDF_STEM) -> str:
     return str(files[-1] if idx == 0 else files[idx - 1])
 
 
-# ── Step selection (--interactive) ──────────────────────────────────
-
-
 def _select_steps() -> list[str]:
-    """Prompt user which steps to include. Returns list of step keys."""
     steps_info = [
         ("calibrate", "Calibration (required if no saved results exist)"),
         ("export", "Export URDF"),
@@ -465,11 +529,7 @@ def _select_steps() -> list[str]:
     return selected
 
 
-# ── Parsing ─────────────────────────────────────────────────────────
-
-
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
             "UR10 calibration, URDF update, and validation — all-in-one entry-point. "
@@ -574,9 +634,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# ── Calibration ─────────────────────────────────────────────────────
-
-
 def _run_calibration(
     urdf_path: str,
     config_path: str,
@@ -585,11 +642,6 @@ def _run_calibration(
     verbose: bool = False,
     validation_data: str | None = None,
 ) -> tuple[np.ndarray, list[str], str]:
-    """Run UR10 calibration.
-
-    Returns (result_vector, param_names, saved_path) where *saved_path*
-    is the timestamped .npz path.
-    """
     ur10 = load_robot(urdf_path, package_dirs="../../models", load_by_urdf=True)
     ur10_calib = UR10Calibration(ur10, config_path)
     ur10_calib.calib_config["known_baseframe"] = False
@@ -600,14 +652,12 @@ def _run_calibration(
     result = ur10_calib.solve(plotting=plot, enable_logging=verbose)
     param_names = ur10_calib.calib_config["param_name"]
 
-    # Save with timestamp
     os.makedirs(DATA_DIR, exist_ok=True)
     ts = _timestamp_str()
     saved_path = os.path.join(DATA_DIR, f"calibration_results_{ts}.npz")
     np.savez(saved_path, result=result.x, param_names=param_names)
     print(f"Calibration results saved to {saved_path}")
 
-    # Print log-map residual statistics (full 6-DOF: position + orientation)
     PEE_est = ur10_calib.get_pose_from_measure(result.x)
     residuals = ur10_calib._compute_logmap_residuals(
         ur10_calib.PEE_measured, PEE_est
@@ -627,9 +677,6 @@ def _run_calibration(
     return result.x, param_names, saved_path
 
 
-# ── Export + verify ─────────────────────────────────────────────────
-
-
 def export_with_verification(
     params: dict,
     nominal_urdf: str | Path,
@@ -640,29 +687,11 @@ def export_with_verification(
     calibration_type: str = "mocap",
     verbose: bool = False,
 ) -> tuple[str, str | None, URDFComparison, object]:
-    """Export URDF(和可选的 MJCF XML)并验证 FK。
-
-    直接覆盖原始文件(用 git 管理版本)。
-
-    Args:
-        params: {参数名: 值}(关节级 + 坐标系参数)。
-                坐标系参数自动识别,不写入模型。
-        nominal_urdf: 原始 URDF 路径(会被覆盖)。
-        output_path: 指定输出路径;None 则覆盖原始 URDF。
-        nominal_xml: 原始 MJCF XML 路径;None 则不导出 XML。
-        xml_output_path: 指定 XML 输出路径;None 则覆盖原始 XML。
-        calibration_type: 传给 frame_settings_doc()。
-        verbose: 打印详细日志。
-
-    Returns:
-        (modified_urdf_path, modified_xml_path_or_None, comparison, errors)
-    """
     nominal_path = Path(nominal_urdf)
 
     if output_path is None:
         output_path = str(nominal_path)
 
-    # 导出 URDF — export_urdf() 自动区分关节参数和坐标系参数
     modified_path = export_urdf(
         str(nominal_path),
         params,
@@ -670,7 +699,6 @@ def export_with_verification(
         verbose=verbose,
     )
 
-    # 同步导出 MJCF XML(如果指定了原始 XML)
     modified_xml = None
     if nominal_xml and Path(nominal_xml).exists():
         modified_xml = export_xml(
@@ -680,10 +708,8 @@ def export_with_verification(
             verbose=verbose,
         )
 
-    # 显示测量坐标系文档
     frame_settings_doc(calibration_type=calibration_type, verbose=verbose)
 
-    # 打印测量坐标系参数(不自动写入)
     frame_params = {
         k: v
         for k, v in params.items()
@@ -701,7 +727,6 @@ def export_with_verification(
     else:
         print("\nNo metrology frame parameters in calibration result.")
 
-    # URDF 导出一致性检查
 
     print("URDF export consistency check (nominal vs. exported URDF)")
     print("=" * 60)
@@ -716,17 +741,9 @@ def export_with_verification(
     return modified_path, modified_xml, comp, errors
 
 
-# ── Visual validation ───────────────────────────────────────────────
-
-
 def show_validation(comp: URDFComparison):
-    """Open interactive viser validation with trajectory, static comparison,
-    error plots, replay, and opacity controls.
-
-    See :meth:`URDFComparison.show_interactive_validation` for details.
-    """
     try:
-        import viser  # noqa: F401
+        import viser
     except ImportError:
         print("  viser not installed; skipping visual validation.")
         return
@@ -734,11 +751,7 @@ def show_validation(comp: URDFComparison):
     comp.show_interactive_validation(n_trajectory=50, port=8080)
 
 
-# ── Mode handlers ───────────────────────────────────────────────────
-
-
 def _run_update_model(args: argparse.Namespace) -> None:
-    """加载 .npz → 导出 URDF + XML → 验证 FK。"""
     npz_path = args.model if args.model else _select_npz()
     print(f"\nLoading calibration results from: {npz_path}")
     data = np.load(npz_path)
@@ -767,7 +780,6 @@ def _run_update_model(args: argparse.Namespace) -> None:
 
 
 def _run_viz_validation(args: argparse.Namespace) -> None:
-    """Visually validate a previously exported modified URDF."""
     if args.model:
         modified_path = args.model
     else:
@@ -779,12 +791,7 @@ def _run_viz_validation(args: argparse.Namespace) -> None:
     show_validation(comp)
 
 
-# ── Main ────────────────────────────────────────────────────────────
-
-
 def main() -> None:
-    """Run the full calibration → export → verify → visualise pipeline."""
-    # 切换到脚本所在目录,保证相对路径能找到
     import os
     os.chdir(Path(__file__).resolve().parent)
     args = parse_args()
@@ -794,7 +801,6 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # Validate input files
     urdf_path = Path(args.urdf)
     config_path = Path(args.config)
     if not urdf_path.exists():
@@ -802,17 +808,14 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        # ── MODE: --update-model ──
         if args.update_model:
             _run_update_model(args)
             return
 
-        # ── MODE: --viz-validation ──
         if args.viz_validation:
             _run_viz_validation(args)
             return
 
-        # Determine which steps to run
         if args.interactive:
             if not sys.stdin.isatty():
                 print(
@@ -827,17 +830,14 @@ def main() -> None:
             if args.calibrate_only:
                 steps = ["calibrate"]
 
-        # Auto-enable dependencies
         if "viz" in steps and "export" not in steps:
             print("Note: 'viz' requires a modified URDF. Including 'export' + 'verify'.")
             steps.extend(["export", "verify"])
 
-        # Validate config (needed by calibration step)
         if "calibrate" in steps and not config_path.exists():
             print(f"Error: Config not found: {config_path}", file=sys.stderr)
             sys.exit(1)
 
-        # ── Phase 1: Calibration ──
         result_x = None
         param_names = None
         if "calibrate" in steps:
@@ -855,7 +855,6 @@ def main() -> None:
                 )
                 return
         else:
-            # Load latest saved results if needed for export
             if "export" in steps or "verify" in steps or "viz" in steps:
                 npz_path = _select_npz()
                 print(f"Loading calibration results from: {npz_path}")
@@ -866,7 +865,6 @@ def main() -> None:
         params = dict(zip(param_names, result_x))
         print(f"\nLoaded {len(params)} calibration parameters.")
 
-        # ── Phase 2: Export + verify ──
         comp = None
         modified_urdf = None
         modified_xml = None
@@ -879,7 +877,6 @@ def main() -> None:
                 verbose=args.verbose,
             )
 
-        # ── Phase 3: Visual validation ──
         if "viz" in steps and comp is not None:
             show_validation(comp)
 
