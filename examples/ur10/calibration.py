@@ -67,6 +67,272 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = "data/calibration"
 URDF_STEM = "ur10_robot"  # stem for discovering modified URDFs
+# 默认 MJCF 模型(与 replay_mujoco.py 一致)
+XML_PATH = "../../models/ur_description/ur10e.xml"
+
+
+# ── MJCF(XML)导出 ──────────────────────────────────────────────────
+
+
+def _rpy_to_quat(rpy: np.ndarray) -> np.ndarray:
+    """RPY(弧度)转四元数 [w, x, y, z](MuJoCo 顺序)。"""
+    r, p, y = rpy
+    cr, sr = np.cos(r / 2), np.sin(r / 2)
+    cp, sp = np.cos(p / 2), np.sin(p / 2)
+    cy, sy = np.cos(y / 2), np.sin(y / 2)
+    return np.array([
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ])
+
+
+def _quat_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    """四元数乘法 [w,x,y,z]。"""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ])
+
+
+def _parse_float(val) -> float:
+    """安全转 float。"""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def export_xml(
+    nominal_xml_path: str,
+    params: dict,
+    *,
+    output_path: str | None = None,
+    verbose: bool = False,
+) -> str:
+    """把标定/辨识参数写回 MuJoCo MJCF(XML)。
+
+    与 export_urdf 对应,支持以下参数:
+      - 几何偏移(叠加): d_px/d_py/d_pz/d_phix/d_phiy/d_phiz_{joint}
+      - 质量(绝对): m_{body}
+      - 一阶矩(绝对): mx/my/mz_{body} → COM = (mx/m, my/m, mz/m)
+      - 惯量(绝对): Ixx/Ixy/Ixz/Iyy/Iyz/Izz_{body}
+        非对角为零用 diaginertia,否则用 fullinertia
+      - 摩擦(绝对): fv_{joint} → damping, fs_{joint} → frictionloss
+      - 转子惯量(绝对): Ia_{joint} → armature
+      - 测量坐标系参数(base_*, pEE*, phiEE*)不写入 MJCF
+
+    Args:
+        nominal_xml_path: 原始 MJCF 路径。
+        params: {参数名: 值}。
+        output_path: 输出路径,None 则用 <stem>_modified_<时间戳>.xml。
+        verbose: 打印应用了哪些参数。
+
+    Returns:
+        输出 XML 的绝对路径。
+    """
+    import xml.etree.ElementTree as ET
+
+    nominal = Path(nominal_xml_path)
+    if not nominal.exists():
+        raise FileNotFoundError(f"MJCF not found: {nominal}")
+
+    if output_path is None:
+        ts = _timestamp_str()
+        output_path = str(nominal.parent / f"{nominal.stem}_modified_{ts}.xml")
+    out = Path(output_path)
+
+    tree = ET.parse(str(nominal))
+    root = tree.getroot()
+
+    # 建立 body name → element 的索引
+    body_map: dict[str, ET.Element] = {}
+    for body in root.iter("body"):
+        name = body.get("name")
+        if name:
+            body_map[name] = body
+
+    # worldbody 下的第一个 body(base)也可能需要处理
+    worldbody = root.find("worldbody")
+
+    def _get_body(name: str) -> ET.Element | None:
+        return body_map.get(name)
+
+    def _get_or_create_inertial(body: ET.Element) -> ET.Element:
+        ine = body.find("inertial")
+        if ine is None:
+            ine = ET.SubElement(body, "inertial")
+        return ine
+
+    def _get_joint(body: ET.Element, name: str) -> ET.Element | None:
+        for jt in body.findall("joint"):
+            if jt.get("name") == name:
+                return jt
+        return None
+
+    # ── 按类别收集参数 ──
+    # 几何偏移(叠加到 body 的 pos/quat)
+    placement: dict[str, list[float]] = {}  # joint → [dx,dy,dz,dphix,dphiy,dphiz]
+    for name, val in params.items():
+        for axis, idx in [("d_px", 0), ("d_py", 1), ("d_pz", 2),
+                          ("d_phix", 3), ("d_phiy", 4), ("d_phiz", 5)]:
+            if name.startswith(f"{axis}_"):
+                target = name[len(axis) + 1:]
+                if target:
+                    placement.setdefault(target, [0.0] * 6)[idx] = _parse_float(val)
+                break
+
+    # 惯性参数(绝对): m_, mx_, my_, mz_, Ixx_... Izz_
+    mass: dict[str, float] = {}
+    moments: dict[str, list[float]] = {}  # body → [mx, my, mz]
+    inertia: dict[str, np.ndarray] = {}   # body → 3x3 惯量矩阵
+    for name, val in params.items():
+        v = _parse_float(val)
+        if name.startswith("m_"):
+            mass[name[2:]] = v
+        elif name.startswith("mx_"):
+            moments.setdefault(name[3:], [0.0, 0.0, 0.0])[0] = v
+        elif name.startswith("my_"):
+            moments.setdefault(name[3:], [0.0, 0.0, 0.0])[1] = v
+        elif name.startswith("mz_"):
+            moments.setdefault(name[3:], [0.0, 0.0, 0.0])[2] = v
+        elif name.startswith("Ixx_"):
+            inertia.setdefault(name[4:], np.zeros((3, 3)))[0, 0] = v
+        elif name.startswith("Iyy_"):
+            inertia.setdefault(name[4:], np.zeros((3, 3)))[1, 1] = v
+        elif name.startswith("Izz_"):
+            inertia.setdefault(name[4:], np.zeros((3, 3)))[2, 2] = v
+        elif name.startswith("Ixy_"):
+            inertia.setdefault(name[4:], np.zeros((3, 3)))[0, 1] = v
+            inertia[name[4:]][1, 0] = v
+        elif name.startswith("Ixz_"):
+            inertia.setdefault(name[4:], np.zeros((3, 3)))[0, 2] = v
+            inertia[name[4:]][2, 0] = v
+        elif name.startswith("Iyz_"):
+            inertia.setdefault(name[4:], np.zeros((3, 3)))[1, 2] = v
+            inertia[name[4:]][2, 1] = v
+
+    # 摩擦/转子惯量(绝对): fv_, fs_, Ia_
+    friction: dict[str, dict] = {}  # joint → {damping, frictionloss, armature}
+    for name, val in params.items():
+        v = _parse_float(val)
+        if name.startswith("fv_"):
+            friction.setdefault(name[3:], {})["damping"] = v
+        elif name.startswith("fs_"):
+            friction.setdefault(name[3:], {})["frictionloss"] = v
+        elif name.startswith("Ia_"):
+            friction.setdefault(name[3:], {})["armature"] = v
+
+    applied = 0
+
+    # ── 应用几何偏移 ──
+    for target, deltas in placement.items():
+        body = _get_body(target)
+        if body is None:
+            if verbose:
+                logger.warning("XML body '%s' not found, skipping", target)
+            continue
+        # pos 叠加
+        cur_pos = [float(x) for x in body.get("pos", "0 0 0").split()]
+        while len(cur_pos) < 3:
+            cur_pos.append(0.0)
+        new_pos = [cur_pos[i] + deltas[i] for i in range(3)]
+        body.set("pos", " ".join(_fmt_xml(x) for x in new_pos))
+        # quat 叠加(RPY 增量转四元数后左乘)
+        cur_quat = [float(x) for x in body.get("quat", "1 0 0 0").split()]
+        while len(cur_quat) < 4:
+            cur_quat.extend([0.0] * (4 - len(cur_quat)))
+        cur_q = np.array(cur_quat)
+        d_rpy = np.array(deltas[3:6])
+        if np.any(d_rpy != 0):
+            dq = _rpy_to_quat(d_rpy)
+            new_q = _quat_mul(dq, cur_q)
+            new_q = new_q / np.linalg.norm(new_q)
+            body.set("quat", " ".join(_fmt_xml(x) for x in new_q))
+        applied += 1
+        if verbose:
+            logger.info("XML body '%s' pos/quat updated", target)
+
+    # ── 应用惯性参数 ──
+    all_bodies = set(mass) | set(moments) | set(inertia)
+    for bname in all_bodies:
+        body = _get_body(bname)
+        if body is None:
+            if verbose:
+                logger.warning("XML body '%s' not found, skipping", bname)
+            continue
+        ine = _get_or_create_inertial(body)
+        m = mass.get(bname)
+        if m is not None:
+            ine.set("mass", _fmt_xml(m))
+        # COM = 一阶矩 / 质量
+        if bname in moments and m and m != 0:
+            mx, my, mz = moments[bname]
+            com = [mx / m, my / m, mz / m]
+            ine.set("pos", " ".join(_fmt_xml(x) for x in com))
+        # 惯量
+        if bname in inertia:
+            I = inertia[bname]
+            Ixx, Iyy, Izz = I[0, 0], I[1, 1], I[2, 2]
+            Ixy, Ixz, Iyz = I[0, 1], I[0, 2], I[1, 2]
+            if abs(Ixy) < 1e-15 and abs(Ixz) < 1e-15 and abs(Iyz) < 1e-15:
+                ine.set("diaginertia",
+                        " ".join(_fmt_xml(x) for x in [Ixx, Iyy, Izz]))
+                ine.attrib.pop("fullinertia", None)
+            else:
+                # MuJoCo fullinertia: Ixx Iyy Izz Ixy Ixz Iyz
+                ine.set("fullinertia",
+                        " ".join(_fmt_xml(x)
+                                 for x in [Ixx, Iyy, Izz, Ixy, Ixz, Iyz]))
+                ine.attrib.pop("diaginertia", None)
+        applied += 1
+        if verbose:
+            logger.info("XML body '%s' inertia updated", bname)
+
+    # ── 应用摩擦/转子惯量 ──
+    for jname, attrs in friction.items():
+        body = _get_body(jname)
+        if body is None:
+            if verbose:
+                logger.warning("XML body '%s' not found, skipping", jname)
+            continue
+        jt = _get_joint(body, jname)
+        if jt is None:
+            # 关节名可能就是 body 名,尝试在 body 内找任意 joint
+            joints = body.findall("joint")
+            if joints:
+                jt = joints[0]
+        if jt is None:
+            continue
+        if "damping" in attrs:
+            jt.set("damping", _fmt_xml(attrs["damping"]))
+        if "frictionloss" in attrs:
+            jt.set("frictionloss", _fmt_xml(attrs["frictionloss"]))
+        if "armature" in attrs:
+            jt.set("armature", _fmt_xml(attrs["armature"]))
+        applied += 1
+        if verbose:
+            logger.info("XML joint '%s' dynamics updated", jname)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(str(out), xml_declaration=True, encoding="utf-8")
+    print(f"XML exported: {out}  ({applied} params applied)")
+    return str(out.resolve())
+
+
+def _fmt_xml(v: float) -> str:
+    """格式化浮点数,紧凑无科学记数法。"""
+    if v == 0.0:
+        return "0"
+    s = f"{v:.10g}"
+    if "e" in s or "E" in s:
+        s = f"{v:.10f}".rstrip("0").rstrip(".")
+    return s
 
 
 # ── Timestamp and file discovery helpers ────────────────────────────
@@ -370,33 +636,36 @@ def export_with_verification(
     nominal_urdf: str | Path,
     *,
     output_path: str | Path | None = None,
+    nominal_xml: str | Path | None = None,
+    xml_output_path: str | Path | None = None,
     calibration_type: str = "mocap",
     verbose: bool = False,
-) -> tuple[str, URDFComparison, object]:
-    """Export URDF with joint-level params and verify via URDFComparison.
+) -> tuple[str, str | None, URDFComparison, object]:
+    """Export URDF(和可选的 MJCF XML)并验证 FK。
 
     Args:
-        params: Dict of {param_name: value} (joint + frame params).
-                Frame params are auto-detected and NOT applied.
-        nominal_urdf: Path to the nominal URDF.
-        output_path: Path for modified URDF.  If None, generates
-                     a timestamped path: urdf/<stem>_modified_<ts>.urdf.
-        calibration_type: Passed to frame_settings_doc().
-        verbose: Enable verbose logging.
+        params: {参数名: 值}(关节级 + 坐标系参数)。
+                坐标系参数自动识别,不写入模型。
+        nominal_urdf: 原始 URDF 路径。
+        output_path: 修改后 URDF 的输出路径。
+                     None 则自动生成 urdf/<stem>_modified_<ts>.urdf。
+        nominal_xml: 原始 MJCF XML 路径;None 则不导出 XML。
+        xml_output_path: 修改后 XML 的输出路径;None 则自动生成。
+        calibration_type: 传给 frame_settings_doc()。
+        verbose: 打印详细日志。
 
     Returns:
-        (modified_urdf_path, comparison, errors) where *errors* is a
-        FkConsistencyResult from ``comparison.fk_consistency_check()``.
+        (modified_urdf_path, modified_xml_path_or_None, comparison, errors)
     """
     nominal_path = Path(nominal_urdf)
 
-    # Generate timestamped output path if none provided
+    # 生成带时间戳的 URDF 输出路径
     if output_path is None:
         stem = nominal_path.stem
         ts = _timestamp_str()
         output_path = str(nominal_path.parent / f"{stem}_modified_{ts}.urdf")
 
-    # Export URDF — export_urdf() auto-splits joint vs frame params
+    # 导出 URDF — export_urdf() 自动区分关节参数和坐标系参数
     modified_path = export_urdf(
         str(nominal_path),
         params,
@@ -404,10 +673,20 @@ def export_with_verification(
         verbose=verbose,
     )
 
-    # Show metrology frame documentation
+    # 同步导出 MJCF XML(如果指定了原始 XML)
+    modified_xml = None
+    if nominal_xml and Path(nominal_xml).exists():
+        modified_xml = export_xml(
+            str(nominal_xml),
+            params,
+            output_path=str(xml_output_path) if xml_output_path else None,
+            verbose=verbose,
+        )
+
+    # 显示测量坐标系文档
     frame_settings_doc(calibration_type=calibration_type, verbose=verbose)
 
-    # Print metrology-frame params (not auto-applied)
+    # 打印测量坐标系参数(不自动写入)
     frame_params = {
         k: v
         for k, v in params.items()
@@ -425,7 +704,7 @@ def export_with_verification(
     else:
         print("\nNo metrology frame parameters in calibration result.")
 
-    # URDF export consistency check
+    # URDF 导出一致性检查
 
     print("URDF export consistency check (nominal vs. exported URDF)")
     print("=" * 60)
@@ -437,7 +716,7 @@ def export_with_verification(
     print(f"  Max orientation:  {errors.max_orientation * 180 / np.pi:.4f} deg")
     print(f"  (samples: {len(errors.per_sample)})")
 
-    return modified_path, comp, errors
+    return modified_path, modified_xml, comp, errors
 
 
 # ── Visual validation ───────────────────────────────────────────────
@@ -462,7 +741,7 @@ def show_validation(comp: URDFComparison):
 
 
 def _run_update_model(args: argparse.Namespace) -> None:
-    """Load saved .npz → export URDF → verify FK."""
+    """加载 .npz → 导出 URDF + XML → 验证 FK。"""
     npz_path = args.model if args.model else _select_npz()
     print(f"\nLoading calibration results from: {npz_path}")
     data = np.load(npz_path)
@@ -471,10 +750,11 @@ def _run_update_model(args: argparse.Namespace) -> None:
     params = dict(zip(param_names, result_x))
     print(f"Loaded {len(params)} calibration parameters.")
 
-    modified_urdf, comp, errors = export_with_verification(
+    modified_urdf, modified_xml, comp, errors = export_with_verification(
         params,
         str(args.urdf),
         output_path=args.output,
+        nominal_xml=XML_PATH,
         verbose=args.verbose,
     )
 
@@ -483,6 +763,9 @@ def _run_update_model(args: argparse.Namespace) -> None:
     print(f"  Source results: {npz_path}")
     print(f"  Nominal URDF:   {args.urdf}")
     print(f"  Modified URDF:  {modified_urdf}")
+    if modified_xml:
+        print(f"  Nominal XML:    {XML_PATH}")
+        print(f"  Modified XML:   {modified_xml}")
     print("=" * 60)
 
 
@@ -589,11 +872,13 @@ def main() -> None:
         # ── Phase 2: Export + verify ──
         comp = None
         modified_urdf = None
+        modified_xml = None
         if "export" in steps and params is not None:
-            modified_urdf, comp, errors = export_with_verification(
+            modified_urdf, modified_xml, comp, errors = export_with_verification(
                 params,
                 str(urdf_path),
                 output_path=args.output,
+                nominal_xml=XML_PATH,
                 verbose=args.verbose,
             )
 
@@ -607,6 +892,9 @@ def main() -> None:
                 print("Calibration + export complete.")
                 print(f"  Nominal URDF:  {urdf_path}")
                 print(f"  Modified URDF: {modified_urdf}")
+                if modified_xml:
+                    print(f"  Nominal XML:   {XML_PATH}")
+                    print(f"  Modified XML:  {modified_xml}")
             elif args.calibrate_only:
                 print("Calibration results saved.")
         print("=" * 60)

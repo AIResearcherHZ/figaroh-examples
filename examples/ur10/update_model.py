@@ -14,16 +14,16 @@
 # limitations under the License.
 
 """
-Thin wrapper around calibration.py's combined pipeline.
+更新模型脚本 —— 把标定后的参数写回 URDF。
 
-Equivalent to ``python calibration.py --update-model``.  See
-``python calibration.py --help`` for all available flags.
+本质上是 ``calibration.py --update-model`` 的快捷入口，
+其他参数和 ``calibration.py`` 完全一样，用 ``--help`` 可以查看。
 
-Usage::
+用法::
 
-    python update_model.py                    # same as calibration.py --update-model
-    python update_model.py --output <path>    # custom output path
-    python update_model.py --verbose          # verbose logging
+    python update_model.py                    # 等同于 calibration.py --update-model
+    python update_model.py --output <路径>    # 指定输出 URDF 的路径
+    python update_model.py --verbose          # 打印详细日志
 """
 
 from __future__ import annotations
@@ -31,14 +31,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Ensure script dir and project root are on sys.path for the import
+# 把脚本所在目录和项目根目录加入 sys.path，方便 import
 _script_dir = str(Path(__file__).parent.resolve())
 _project_root = str(Path(__file__).parents[2])
 for p in [_script_dir, _project_root]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# Inject --update-model into argv before calling main
+# 自动给命令行加上 --update-model，再交给 calibration 的 main 处理
 if "--update-model" not in sys.argv:
     sys.argv.insert(1, "--update-model")
 
