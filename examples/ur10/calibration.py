@@ -143,8 +143,7 @@ def export_xml(
         raise FileNotFoundError(f"MJCF not found: {nominal}")
 
     if output_path is None:
-        ts = _timestamp_str()
-        output_path = str(nominal.parent / f"{nominal.stem}_modified_{ts}.xml")
+        output_path = str(nominal)
     out = Path(output_path)
 
     tree = ET.parse(str(nominal))
@@ -643,14 +642,15 @@ def export_with_verification(
 ) -> tuple[str, str | None, URDFComparison, object]:
     """Export URDF(和可选的 MJCF XML)并验证 FK。
 
+    直接覆盖原始文件(用 git 管理版本)。
+
     Args:
         params: {参数名: 值}(关节级 + 坐标系参数)。
                 坐标系参数自动识别,不写入模型。
-        nominal_urdf: 原始 URDF 路径。
-        output_path: 修改后 URDF 的输出路径。
-                     None 则自动生成 urdf/<stem>_modified_<ts>.urdf。
+        nominal_urdf: 原始 URDF 路径(会被覆盖)。
+        output_path: 指定输出路径;None 则覆盖原始 URDF。
         nominal_xml: 原始 MJCF XML 路径;None 则不导出 XML。
-        xml_output_path: 修改后 XML 的输出路径;None 则自动生成。
+        xml_output_path: 指定 XML 输出路径;None 则覆盖原始 XML。
         calibration_type: 传给 frame_settings_doc()。
         verbose: 打印详细日志。
 
@@ -659,11 +659,8 @@ def export_with_verification(
     """
     nominal_path = Path(nominal_urdf)
 
-    # 生成带时间戳的 URDF 输出路径
     if output_path is None:
-        stem = nominal_path.stem
-        ts = _timestamp_str()
-        output_path = str(nominal_path.parent / f"{stem}_modified_{ts}.urdf")
+        output_path = str(nominal_path)
 
     # 导出 URDF — export_urdf() 自动区分关节参数和坐标系参数
     modified_path = export_urdf(

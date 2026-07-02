@@ -95,33 +95,31 @@ def _export_models(
 ) -> tuple[str | None, str | None]:
     """把辨识参数写回 URDF 和 MJCF XML。
 
+    直接覆盖原始文件(用 git 管理版本)。
+
     Args:
         params: {参数名: 值}。
-        urdf_path: 原始 URDF 路径。
-        xml_path: 原始 XML 路径。
+        urdf_path: 原始 URDF 路径(会被覆盖)。
+        xml_path: 原始 XML 路径(会被覆盖)。
         verbose: 详细日志。
 
     Returns:
         (modified_urdf, modified_xml),失败则对应项为 None。
     """
-    ts = _timestamp()
-    urdf_out = str(Path(urdf_path).parent / f"ur10_robot_modified_{ts}.urdf")
-    xml_out = str(Path(xml_path).parent / f"ur10e_modified_{ts}.xml")
-
     modified_urdf = None
     modified_xml = None
     try:
         modified_urdf = export_urdf(
-            urdf_path, params, output_path=urdf_out, verbose=verbose
+            urdf_path, params, output_path=urdf_path, verbose=verbose
         )
-        print(f"URDF exported: {modified_urdf}")
+        print(f"URDF updated: {modified_urdf}")
     except Exception as e:
         print(f"Warning: URDF export failed: {e}", file=sys.stderr)
 
     try:
         if Path(xml_path).exists():
             modified_xml = export_xml(
-                xml_path, params, output_path=xml_out, verbose=verbose
+                xml_path, params, output_path=xml_path, verbose=verbose
             )
     except Exception as e:
         print(f"Warning: XML export failed: {e}", file=sys.stderr)
@@ -172,10 +170,24 @@ def main(args: argparse.Namespace) -> None:
         ps["act_idxq"] = [J.idx_q for J in ps["act_J"]]
         ps["act_idxv"] = [J.idx_v for J in ps["act_J"]]
 
-        # 默认开启重构,把基参数还原成完整标准参数(写回 URDF/XML 必需)
+        # 默认开启重构 + 物理一致性约束
+        # 重构:把基参数还原成完整标准参数(nullspace 方法)
+        # 物理一致性:投影到可行域,保证质量>0、惯量 PSD(半正定)
         if not args.no_update:
             if not ps.get("reconstruction"):
-                ps["reconstruction"] = {"enabled": True, "method": "nullspace"}
+                ps["reconstruction"] = {
+                    "enabled": True,
+                    "method": "nullspace",
+                    "prior": {"source": "dict"},
+                }
+            if not ps.get("physical_consistency"):
+                ps["physical_consistency"] = {
+                    "enabled": True,
+                    "mass_min": 0.01,
+                    "psd_eig_tol": -1e-10,
+                    "solver": "cvxopt",
+                    "skip_if_feasible": False,
+                }
 
         # 初始化(含数据处理)
         ur10_identif.initialize()
@@ -219,27 +231,36 @@ def main(args: argparse.Namespace) -> None:
             print("Auto-updating model (URDF + XML)...")
             print("=" * 60)
 
-            recon = (ur10_identif.result or {}).get("reconstruction", {})
-            recon_status = recon.get("status", "unavailable")
-            theta_r_dict = recon.get("theta_r_dict", {})
+            result = ur10_identif.result or {}
+            recon = result.get("reconstruction", {})
+            pc = result.get("physical consistency", {})
 
-            if recon_status != "ok" or not theta_r_dict:
-                print(
-                    f"Warning: reconstruction status='{recon_status}', "
-                    "cannot export full standard parameters."
-                )
-                print("  Enable reconstruction in config or check data quality.")
-                return
-
-            # 合并:重构出来的参数覆盖标称值,缺失的用标称标准参数补全
+            # 标称标准参数(兜底)
             std_params = get_standard_parameters(
                 ur10_identif.model, ur10_identif.identif_config
             )
             export_params = dict(std_params)
-            export_params.update(theta_r_dict)
 
-            print(f"Reconstructed {len(theta_r_dict)} standard parameters.")
-            print(f"Total export parameters (with nominal fallback): {len(export_params)}")
+            # 1. 用重构结果覆盖
+            theta_r_dict = recon.get("theta_r_dict", {})
+            if theta_r_dict:
+                export_params.update(theta_r_dict)
+                print(f"Reconstructed {len(theta_r_dict)} standard parameters.")
+
+            # 2. 用物理一致性投影结果覆盖(保证质量>0、惯量 PSD)
+            pc_status = pc.get("status", "unavailable")
+            proj_params = pc.get("projected_parameters", {})
+            if proj_params:
+                export_params.update(proj_params)
+                print(f"Physical consistency: status='{pc_status}', "
+                      f"{len(proj_params)} projected parameters applied.")
+            else:
+                print(f"Warning: physical consistency status='{pc_status}', "
+                      "no projection applied.")
+                print("  Parameters may not satisfy physical constraints "
+                      "(mass>0, inertia PSD).")
+
+            print(f"Total export parameters: {len(export_params)}")
 
             modified_urdf, modified_xml = _export_models(
                 export_params,
