@@ -1,49 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
 <mujoco model="ur10">
-  <compiler angle="radian" autolimits="true"/>
-  <option integrator="implicitfast" gravity="0 0 -9.81"/>
+  <compiler angle="radian" autolimits="true" />
+  <option integrator="implicitfast" gravity="0 0 -9.81" />
   <default>
-    <geom contype="0" conaffinity="0"/>
+    <geom contype="0" conaffinity="0" />
   </default>
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
-    <material name="ur" rgba="0.7 0.7 0.72 1"/>
-    <mesh name="base" file="meshes/ur10/collision/base.stl"/>
-    <mesh name="shoulder" file="meshes/ur10/collision/shoulder.stl"/>
-    <mesh name="upperarm" file="meshes/ur10/collision/upperarm.stl"/>
-    <mesh name="forearm" file="meshes/ur10/collision/forearm.stl"/>
-    <mesh name="wrist1" file="meshes/ur10/collision/wrist1.stl"/>
-    <mesh name="wrist2" file="meshes/ur10/collision/wrist2.stl"/>
-    <mesh name="wrist3" file="meshes/ur10/collision/wrist3.stl"/>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512" />
+    <material name="ur" rgba="0.7 0.7 0.72 1" />
+    <mesh name="base" file="meshes/ur10/collision/base.stl" />
+    <mesh name="shoulder" file="meshes/ur10/collision/shoulder.stl" />
+    <mesh name="upperarm" file="meshes/ur10/collision/upperarm.stl" />
+    <mesh name="forearm" file="meshes/ur10/collision/forearm.stl" />
+    <mesh name="wrist1" file="meshes/ur10/collision/wrist1.stl" />
+    <mesh name="wrist2" file="meshes/ur10/collision/wrist2.stl" />
+    <mesh name="wrist3" file="meshes/ur10/collision/wrist3.stl" />
   </asset>
   <worldbody>
-    <light pos="0 0 3" dir="0 0 -1"/>
+    <light pos="0 0 3" dir="0 0 -1" />
     <body name="base_link" pos="0 0 0" quat="1 0 0 0">
-      <inertial pos="0 0 0" mass="4.0" diaginertia="0.0061063308908 0.0061063308908 0.01125"/>
-      <geom type="mesh" mesh="base" material="ur"/>
+      <inertial pos="0 0 0" mass="4.0" diaginertia="0.0061063308908 0.0061063308908 0.01125" />
+      <geom type="mesh" mesh="base" material="ur" />
       <body name="shoulder_pan_joint" pos="0 0 0.1273" quat="1 0 0 0">
-      <inertial pos="0 0 0" mass="7.778" diaginertia="0.0314743125769 0.0314743125769 0.021875625"/>
-      <joint name="shoulder_pan_joint" type="hinge" axis="0 0 1" range="-6.28319 6.28319"/>
-      <geom type="mesh" mesh="shoulder" material="ur"/>
+      <inertial pos="-0 0 0" mass="7.778002758" diaginertia="0.0314743062 0.0314743062 0.02187561079" />
+      <joint name="shoulder_pan_joint" type="hinge" axis="0 0 1" range="-6.28319 6.28319" />
+      <geom type="mesh" mesh="shoulder" material="ur" />
       <body name="shoulder_lift_joint" pos="0 0.220941 0" quat="0.707106781 0 0.707106781 0">
-        <inertial pos="0 0 0.306" mass="12.93" diaginertia="0.421753803798 0.421753803798 0.036365625"/>
-        <joint name="shoulder_lift_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319"/>
-        <geom type="mesh" mesh="upperarm" material="ur"/>
+        <inertial pos="-0 0 0.3059999286" mass="12.93000254" diaginertia="0.4217542052 0.4217542052 0.03636544433" />
+        <joint name="shoulder_lift_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319" />
+        <geom type="mesh" mesh="upperarm" material="ur" />
         <body name="elbow_joint" pos="0 -0.1719 0.612" quat="1 0 0 0">
-          <inertial pos="0 0 0.28615" mass="3.87" diaginertia="0.111069694097 0.111069694097 0.010884375"/>
-          <joint name="elbow_joint" type="hinge" axis="0 1 0" range="-3.14159 3.14159"/>
-          <geom type="mesh" mesh="forearm" material="ur"/>
+          <inertial pos="0 -0 0.2861485498" mass="3.870025432" diaginertia="0.111071271 0.111071271 0.01088428513" />
+          <joint name="elbow_joint" type="hinge" axis="0 1 0" range="-3.14159 3.14159" />
+          <geom type="mesh" mesh="forearm" material="ur" />
           <body name="wrist_1_joint" pos="0 0 0.5723" quat="0.707106781 0 0.707106781 0">
-            <inertial pos="0 0 0" mass="1.96" diaginertia="0.0051082479567 0.0051082479567 0.0055125"/>
-            <joint name="wrist_1_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319"/>
-            <geom type="mesh" mesh="wrist1" material="ur"/>
+            <inertial pos="0 0 -0" mass="1.960005271" diaginertia="0.005108245264 0.005108245264 0.005512496094" />
+            <joint name="wrist_1_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319" />
+            <geom type="mesh" mesh="wrist1" material="ur" />
             <body name="wrist_2_joint" pos="0 0.1149 0" quat="1 0 0 0">
-              <inertial pos="0 0 0" mass="1.96" diaginertia="0.0051082479567 0.0051082479567 0.0055125"/>
-              <joint name="wrist_2_joint" type="hinge" axis="0 0 1" range="-6.28319 6.28319"/>
-              <geom type="mesh" mesh="wrist2" material="ur"/>
+              <inertial pos="0 0 -0" mass="1.960005271" diaginertia="0.005108245264 0.005108245264 0.005512496094" />
+              <joint name="wrist_2_joint" type="hinge" axis="0 0 1" range="-6.28319 6.28319" />
+              <geom type="mesh" mesh="wrist2" material="ur" />
               <body name="wrist_3_joint" pos="0 0 0.1157" quat="1 0 0 0">
-                <inertial pos="0 0 0" mass="0.202" diaginertia="0.000526462289415 0.000526462289415 0.000568125"/>
-                <joint name="wrist_3_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319"/>
-                <geom type="mesh" mesh="wrist3" material="ur"/>
+                <inertial pos="0 0 -0" mass="0.2019997562" diaginertia="0.000526462281 0.000526462281 0.0005681249998" />
+                <joint name="wrist_3_joint" type="hinge" axis="0 1 0" range="-6.28319 6.28319" />
+                <geom type="mesh" mesh="wrist3" material="ur" />
               </body>
             </body>
           </body>

@@ -1,18 +1,3 @@
-# Copyright [2021-2025] Thanh Nguyen
-# Copyright [2022-2023] [CNRS, Toward SAS]
-
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-# http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
 import os
@@ -21,7 +6,6 @@ from yaml.loader import SafeLoader
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.optimize import least_squares
 from typing import Any, Dict, List
 
 from figaroh.calibration.calibration_tools import (
@@ -32,16 +16,9 @@ from figaroh.calibration.calibration_tools import (
 from figaroh.calibration.base_calibration import BaseCalibration
 from figaroh.identification.base_identification import BaseIdentification
 from figaroh.optimal.base_optimal_calibration import BaseOptimalCalibration
-from figaroh.utils.results_manager import ResultsManager
-from figaroh.utils.error_handling import (
-    CalibrationError,
-    IdentificationError,
-    validate_robot_config,
-    handle_calibration_errors,
-)
+from figaroh.utils.error_handling import handle_calibration_errors
 from figaroh.identification.identification_tools import (
     get_param_from_yaml as get_identification_param_from_yaml,
-    calculate_first_second_order_differentiation,
 )
 from figaroh.tools.regressor import (
     build_regressor_basic,
@@ -49,11 +26,7 @@ from figaroh.tools.regressor import (
     build_regressor_reduced,
 )
 from figaroh.tools.qrdecomposition import get_baseParams
-from figaroh.identification.parameter import (
-    get_standard_parameters,
-    add_standard_additional_parameters,
-    add_custom_parameters,
-)
+from figaroh.identification.parameter import get_standard_parameters
 from figaroh.optimal.base_optimal_trajectory import (
     BaseOptimalTrajectory,
     BaseTrajectoryIPOPTProblem,
@@ -111,47 +84,33 @@ class UR10Identification(BaseIdentification):
         print("UR10 Dynamic Identification initialized")
 
     def load_trajectory_data(self) -> Dict[str, np.ndarray]:
-        print("Loading UR10 trajectory data...")
+        q_df = pd.read_csv("data/identification_q_simulation.csv")
+        tau_df = pd.read_csv("data/identification_tau_simulation.csv")
 
-        try:
-            q_df = DataProcessor.load_csv_data("data/identification_q_simulation.csv")
-            tau_df = DataProcessor.load_csv_data(
-                "data/identification_tau_simulation.csv"
-            )
+        q = q_df[[f"q{j}" for j in range(1, 7)]].to_numpy()
+        dq = q_df[[f"dq{j}" for j in range(1, 7)]].to_numpy()
+        ddq = q_df[[f"ddq{j}" for j in range(1, 7)]].to_numpy()
+        tau = tau_df.to_numpy()[: len(q)]
+        print(f"Loaded {len(q)} samples with exact dq/ddq")
 
-            q_raw = q_df
-            tau_raw = tau_df
+        dt = 0.02
+        time_vector = np.arange(len(q)) * dt
 
-            print(f"Loaded {len(q_raw)} samples from CSV files")
+        return {
+            "timestamps": time_vector.reshape(-1, 1),
+            "positions": q,
+            "velocities": dq,
+            "accelerations": ddq,
+            "torques": tau,
+        }
 
-            max_samples = min(len(q_raw), self.identif_config.get("nb_samples", 100))
-            q_raw = q_raw[:max_samples, :]
-            tau_raw = tau_raw[:max_samples, :]
-
-            if hasattr(DataProcessor, "apply_lowpass_filter"):
-                q_raw = DataProcessor.apply_lowpass_filter(q_raw, cutoff=10.0, fs=100.0)
-
-            q_filtered, dq_filtered, ddq_filtered = (
-                calculate_first_second_order_differentiation(
-                    self.model, q_raw, self.identif_config
-                )
-            )
-
-            dt = 0.01
-            time_vector = np.arange(len(q_filtered)) * dt
-
-            print(f"Processed trajectory data: {len(q_filtered)} samples")
-
-            return {
-                "timestamps": time_vector.reshape(-1, 1),
-                "positions": q_filtered,
-                "velocities": dq_filtered,
-                "accelerations": ddq_filtered,
-                "torques": tau_raw[: len(q_filtered)],
-            }
-
-        except Exception as e:
-            raise IdentificationError(f"Failed to load UR10 trajectory data: {e}")
+    def process_kinematics_data(self, filter_config=None) -> None:
+        self.processed_data = {
+            "timestamps": self.raw_data["timestamps"],
+            "positions": self.raw_data["positions"],
+            "velocities": self.raw_data["velocities"],
+            "accelerations": self.raw_data["accelerations"],
+        }
 
 
 class UR10OptimalCalibration(BaseOptimalCalibration):

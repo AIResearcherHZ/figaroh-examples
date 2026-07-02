@@ -1,17 +1,22 @@
-# Copyright [2021-2025] Thanh Nguyen
-# Copyright [2022-2023] [CNRS, Toward SAS]
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# See http://www.apache.org/licenses/LICENSE-2.0
-
-
-from __future__ import annotations
+import dataclasses
+import time
 
 import numpy as np
+import picos as pc
 import pinocchio as pin
 
+import figaroh.identification.base_identification as _bi
+import figaroh.identification.identification_tools as _it
+import figaroh.identification.parameter as _param
+import figaroh.optimal.base_optimal_trajectory as _bot
+import figaroh.optimal.base_parameter as _bp
+import figaroh.optimal.contraints as _con
 import figaroh.utils.cubic_spline as _cs
+from figaroh.identification import physical_consistency as _phc
+from figaroh.optimal.base_optimal_trajectory import BaseTrajectoryIPOPTProblem
+from figaroh.tools.robotipopt import RobotIPOPTSolver
+
+_TRAJ_MAX_ITERS = 50
 
 
 def _fast_calc_torque(N, robot, q, v, a):
@@ -31,49 +36,29 @@ def _fast_check_cfg_constraints(self, q, v=None, tau=None, soft_lim=0):
         if np.any(q[:, j] > m.upperPositionLimit[j] - delta) or np.any(
             q[:, j] < m.lowerPositionLimit[j] + delta
         ):
-            _cs.logger.debug("Joint position idx_q %d limits violated!", j)
-            _cs.logger.debug("FAILED to generate a feasible cubic spline")
             return True
 
     if v is not None:
         for j in self.act_idxv:
             if np.any(np.abs(v[:, j]) > (1 - soft_lim) * abs(m.velocityLimit[j])):
-                _cs.logger.debug("Joint vel idx_v %d limits violated!", j)
-                _cs.logger.debug("FAILED to generate a feasible cubic spline")
                 return True
 
     if tau is not None:
         for j in self.act_idxv:
             if np.any(np.abs(tau[:, j]) > (1 - soft_lim) * abs(m.effortLimit[j])):
-                _cs.logger.debug("Joint effort idx_v %d limits violated!", j)
-                _cs.logger.debug("FAILED to generate a feasible cubic spline")
                 return True
 
-    _cs.logger.debug(
-        "SUCCEEDED to generate waypoints for a feasible initial cubic spline"
-    )
     return False
 
 
-_TRAJ_MAX_ITERS = 50
+_orig_solver_init = RobotIPOPTSolver.__init__
 
 
-def _patch_ipopt_iterations() -> None:
-    from figaroh.tools.robotipopt import RobotIPOPTSolver
-    from figaroh.optimal.base_optimal_trajectory import BaseTrajectoryIPOPTProblem
-
-    if getattr(RobotIPOPTSolver, "_maxiter_patched", False):
-        return
-    _orig_init = RobotIPOPTSolver.__init__
-
-    def _init(self, problem, config=None):
-        _orig_init(self, problem, config)
-        if isinstance(problem, BaseTrajectoryIPOPTProblem) and self.config is not None:
-            if self.config.max_iterations > _TRAJ_MAX_ITERS:
-                self.config.max_iterations = _TRAJ_MAX_ITERS
-
-    RobotIPOPTSolver.__init__ = _init
-    RobotIPOPTSolver._maxiter_patched = True
+def _solver_init(self, problem, config=None):
+    _orig_solver_init(self, problem, config)
+    if isinstance(problem, BaseTrajectoryIPOPTProblem) and self.config is not None:
+        if self.config.max_iterations > _TRAJ_MAX_ITERS:
+            self.config.max_iterations = _TRAJ_MAX_ITERS
 
 
 def _get_standard_parameters_fixed(model, identif_config=None):
@@ -84,8 +69,6 @@ def _get_standard_parameters_fixed(model, identif_config=None):
 
     params: list = []
     phi: list = []
-    assert len(model.inertias) == model.njoints, \
-        "Inertia count mismatch with joints"
     for jid in range(1, model.njoints):
         jname = model.names[jid]
         pinocchio_params = model.inertias[jid].toDynamicParameters()
@@ -96,55 +79,116 @@ def _get_standard_parameters_fixed(model, identif_config=None):
     return dict(zip(params, phi))
 
 
-def _patch_standard_parameters() -> None:
-    import importlib
+def _prepare_undecimated_data_fixed(self, regressor_reduced):
+    tau = np.asarray(self.processed_data["torques"]).flatten(order="F")
+    return tau, regressor_reduced
 
-    import figaroh.identification.parameter as _param
 
-    if getattr(_param.get_standard_parameters, "_offbyone_fixed", False):
-        return
-    _get_standard_parameters_fixed._offbyone_fixed = True
+def _project_p10_lmi_fixed(
+    p10_hat,
+    *,
+    mass_min=1e-6,
+    psd_eig_tol=-1e-10,
+    weights=None,
+    solver="cvxopt",
+    verbose=False,
+    max_seconds=None,
+    mass_bounds=None,
+    com_bounds=None,
+):
+    p10_hat = np.asarray(p10_hat, dtype=float).reshape(10)
+    if weights is None:
+        w = _phc._auto_weights(p10_hat)
+    else:
+        w = np.asarray(weights, dtype=float).reshape(10)
 
-    _param.get_standard_parameters = _get_standard_parameters_fixed
-    for mod_name in (
-        "figaroh.identification.identification_tools",
-        "figaroh.identification.base_identification",
-        "figaroh.optimal.base_parameter",
-    ):
-        try:
-            mod = importlib.import_module(mod_name)
-            if hasattr(mod, "get_standard_parameters"):
-                mod.get_standard_parameters = _get_standard_parameters_fixed
-        except Exception:
-            pass
+    problem = pc.Problem()
+    m = pc.RealVariable("m", 1)
+    h = pc.RealVariable("h", 3)
+    sigma = pc.SymmetricVariable("sigma", 3)
+    P = pc.block([[sigma, h], [h.T, m]])
+    problem.add_constraint(m >= mass_min)
+    problem.add_constraint(P >> 0)
+
+    if mass_bounds is not None:
+        problem.add_constraint(m >= mass_bounds[0])
+        problem.add_constraint(m <= mass_bounds[1])
+    if com_bounds:
+        axis_idx = {"x": 0, "y": 1, "z": 2}
+        for axis, (h_lo, h_hi) in com_bounds.items():
+            k = axis_idx[axis]
+            problem.add_constraint(h[k] >= h_lo)
+            problem.add_constraint(h[k] <= h_hi)
+
+    tr_sigma = pc.trace(sigma)
+
+    def _I_expr(r, c):
+        e = -sigma[r, c]
+        if r == c:
+            e = e + tr_sigma
+        return e
+
+    obj = pc.SquaredNorm(float(w[0]) * (m - float(p10_hat[0])))
+    for k in range(3):
+        obj = obj + (float(w[1 + k]) * (h[k] - float(p10_hat[1 + k]))) ** 2
+    for r, c, idx in [
+        (0, 0, 4),
+        (0, 1, 5),
+        (1, 1, 6),
+        (0, 2, 7),
+        (1, 2, 8),
+        (2, 2, 9),
+    ]:
+        obj = obj + (float(w[idx]) * (_I_expr(r, c) - float(p10_hat[idx]))) ** 2
+    problem.minimize = obj
+
+    solve_kwargs = {"solver": solver, "verbosity": int(verbose)}
+    if max_seconds is not None:
+        solve_kwargs["max_seconds"] = float(max_seconds)
+
+    t_start = time.perf_counter()
+    problem.solve(**solve_kwargs)
+    t_elapsed = time.perf_counter() - t_start
+
+    m_val = float(m.value)
+    h_val = np.asarray(h.value).reshape(3)
+    S = np.asarray(sigma.value).reshape(3, 3)
+    S = 0.5 * (S + S.T)
+    I = np.trace(S) * np.eye(3) - S
+
+    p10_proj = np.array([
+        m_val, h_val[0], h_val[1], h_val[2],
+        I[0, 0], I[0, 1], I[1, 1], I[0, 2], I[1, 2], I[2, 2],
+    ])
+
+    feas = _phc.check_p10_feasibility(
+        p10_proj, mass_min=mass_min, psd_eig_tol=min(psd_eig_tol, -1e-8)
+    )
+    report = dataclasses.replace(
+        feas,
+        status="projected" if feas.status == "feasible" else "infeasible",
+        solver=solver,
+        objective=float(problem.value) if problem.value is not None else None,
+        runtime=t_elapsed,
+    )
+    return p10_proj, report
 
 
 def apply() -> None:
-    try:
-        _patch_standard_parameters()
-    except Exception:
-        pass
+    _param.get_standard_parameters = _get_standard_parameters_fixed
+    _it.get_standard_parameters = _get_standard_parameters_fixed
+    _bi.get_standard_parameters = _get_standard_parameters_fixed
+    _bp.get_standard_parameters = _get_standard_parameters_fixed
+
+    _bi.BaseIdentification._prepare_undecimated_data = _prepare_undecimated_data_fixed
+    _phc.project_p10_lmi = _project_p10_lmi_fixed
 
     _cs.CubicSpline.check_cfg_constraints = _fast_check_cfg_constraints
-
     _cs.calc_torque = _fast_calc_torque
-    try:
-        import figaroh.optimal.base_optimal_trajectory as _bot
+    _bot.calc_torque = _fast_calc_torque
+    _con.calc_torque = _fast_calc_torque
 
-        _bot.calc_torque = _fast_calc_torque
-    except Exception:
-        pass
-    try:
-        import figaroh.optimal.contraints as _con
-
-        _con.calc_torque = _fast_calc_torque
-    except Exception:
-        pass
-
-    try:
-        _patch_ipopt_iterations()
-    except Exception:
-        pass
+    RobotIPOPTSolver.__init__ = _solver_init
 
 
 apply()

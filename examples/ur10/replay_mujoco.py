@@ -1,11 +1,3 @@
-# Copyright [2021-2025] Thanh Nguyen
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# See http://www.apache.org/licenses/LICENSE-2.0
-
-
-from __future__ import annotations
-
 import argparse
 import os
 from pathlib import Path
@@ -53,7 +45,9 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
-def generate_data(model_path: str, csv_path: str) -> tuple[np.ndarray, np.ndarray]:
+def generate_data(
+    model_path: str, csv_path: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     model = mujoco.MjModel.from_xml_path(model_path)
     data = mujoco.MjData(model)
 
@@ -75,14 +69,27 @@ def generate_data(model_path: str, csv_path: str) -> tuple[np.ndarray, np.ndarra
         mujoco.mj_inverse(model, data)
         tau[i] = data.qfrc_inverse[vadr]
 
-    return q, tau
+    return q, dq, ddq, tau
 
 
-def save_csv(q: np.ndarray, tau: np.ndarray, q_path: str, tau_path: str) -> None:
+def save_csv(
+    q: np.ndarray,
+    dq: np.ndarray,
+    ddq: np.ndarray,
+    tau: np.ndarray,
+    q_path: str,
+    tau_path: str,
+) -> None:
     Path(q_path).parent.mkdir(parents=True, exist_ok=True)
     Path(tau_path).parent.mkdir(parents=True, exist_ok=True)
 
-    q_df = pd.DataFrame(q, columns=[f"q{i}" for i in range(6)])
+    cols = {}
+    for j in range(6):
+        cols[f"q{j + 1}"] = q[:, j]
+    for j in range(6):
+        cols[f"dq{j + 1}"] = dq[:, j]
+        cols[f"ddq{j + 1}"] = ddq[:, j]
+    q_df = pd.DataFrame(cols)
     q_df.to_csv(q_path, index=False)
 
     tau_df = pd.DataFrame(tau, columns=[f"tau{i+1}" for i in range(6)])
@@ -116,8 +123,8 @@ def main() -> None:
     print(f"模型: {args.model}")
     print(f"轨迹: {args.csv}")
 
-    q, tau = generate_data(args.model, args.csv)
-    save_csv(q, tau, args.q_out, args.tau_out)
+    q, dq, ddq, tau = generate_data(args.model, args.csv)
+    save_csv(q, dq, ddq, tau, args.q_out, args.tau_out)
 
     print(f"\n力矩统计(min / max / mean):")
     for j in range(6):

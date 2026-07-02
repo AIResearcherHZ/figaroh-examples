@@ -1,28 +1,9 @@
-# Copyright [2021-2025] Thanh Nguyen
-# Copyright [2022-2023] [CNRS, Toward SAS]
-
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-# http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
-from __future__ import annotations
-
 import argparse
 import datetime
 import logging
 import os
 import re
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -103,11 +84,6 @@ def export_xml(
         if name:
             body_map[name] = body
 
-    worldbody = root.find("worldbody")
-
-    def _get_body(name: str) -> ET.Element | None:
-        return body_map.get(name)
-
     def _get_or_create_inertial(body: ET.Element) -> ET.Element:
         ine = body.find("inertial")
         if ine is None:
@@ -172,11 +148,7 @@ def export_xml(
     applied = 0
 
     for target, deltas in placement.items():
-        body = _get_body(target)
-        if body is None:
-            if verbose:
-                logger.warning("XML body '%s' not found, skipping", target)
-            continue
+        body = body_map[target]
         cur_pos = [float(x) for x in body.get("pos", "0 0 0").split()]
         while len(cur_pos) < 3:
             cur_pos.append(0.0)
@@ -193,68 +165,37 @@ def export_xml(
             new_q = new_q / np.linalg.norm(new_q)
             body.set("quat", " ".join(_fmt_xml(x) for x in new_q))
         applied += 1
-        if verbose:
-            logger.info("XML body '%s' pos/quat updated", target)
 
-    all_bodies = set(mass) | set(moments) | set(inertia)
-    for bname in all_bodies:
-        body = _get_body(bname)
-        if body is None:
-            if verbose:
-                logger.warning("XML body '%s' not found, skipping", bname)
-            continue
+    for bname in set(mass):
+        body = body_map[bname]
         ine = _get_or_create_inertial(body)
 
-        m = mass.get(bname)
-        if m is None:
-            m = _parse_float(ine.get("mass", 0.0))
-        else:
-            ine.set("mass", _fmt_xml(m))
+        m = mass[bname]
+        ine.set("mass", _fmt_xml(m))
 
-        if bname in moments and m and m != 0:
-            mx, my, mz = moments[bname]
-            com = np.array([mx / m, my / m, mz / m])
-            ine.set("pos", " ".join(_fmt_xml(x) for x in com))
-        else:
-            cur = [float(x) for x in ine.get("pos", "0 0 0").split()]
-            while len(cur) < 3:
-                cur.append(0.0)
-            com = np.array(cur[:3])
+        mx, my, mz = moments[bname]
+        com = np.array([mx / m, my / m, mz / m])
+        ine.set("pos", " ".join(_fmt_xml(x) for x in com))
 
-        if bname in inertia:
-            I_O = inertia[bname]
-            c = com
-            I_C = I_O - m * (float(c @ c) * np.eye(3) - np.outer(c, c))
-            Ixx, Iyy, Izz = I_C[0, 0], I_C[1, 1], I_C[2, 2]
-            Ixy, Ixz, Iyz = I_C[0, 1], I_C[0, 2], I_C[1, 2]
-            for attr in ("quat", "euler", "axisangle", "xyaxes", "zaxis"):
-                ine.attrib.pop(attr, None)
-            if abs(Ixy) < 1e-12 and abs(Ixz) < 1e-12 and abs(Iyz) < 1e-12:
-                ine.set("diaginertia",
-                        " ".join(_fmt_xml(x) for x in [Ixx, Iyy, Izz]))
-                ine.attrib.pop("fullinertia", None)
-            else:
-                ine.set("fullinertia",
-                        " ".join(_fmt_xml(x)
-                                 for x in [Ixx, Iyy, Izz, Ixy, Ixz, Iyz]))
-                ine.attrib.pop("diaginertia", None)
+        I_O = inertia[bname]
+        I_C = I_O - m * (float(com @ com) * np.eye(3) - np.outer(com, com))
+        Ixx, Iyy, Izz = I_C[0, 0], I_C[1, 1], I_C[2, 2]
+        Ixy, Ixz, Iyz = I_C[0, 1], I_C[0, 2], I_C[1, 2]
+        for attr in ("quat", "euler", "axisangle", "xyaxes", "zaxis"):
+            ine.attrib.pop(attr, None)
+        if abs(Ixy) < 1e-12 and abs(Ixz) < 1e-12 and abs(Iyz) < 1e-12:
+            ine.set("diaginertia",
+                    " ".join(_fmt_xml(x) for x in [Ixx, Iyy, Izz]))
+            ine.attrib.pop("fullinertia", None)
+        else:
+            ine.set("fullinertia",
+                    " ".join(_fmt_xml(x)
+                             for x in [Ixx, Iyy, Izz, Ixy, Ixz, Iyz]))
+            ine.attrib.pop("diaginertia", None)
         applied += 1
-        if verbose:
-            logger.info("XML body '%s' inertia updated", bname)
 
     for jname, attrs in friction.items():
-        body = _get_body(jname)
-        if body is None:
-            if verbose:
-                logger.warning("XML body '%s' not found, skipping", jname)
-            continue
-        jt = _get_joint(body, jname)
-        if jt is None:
-            joints = body.findall("joint")
-            if joints:
-                jt = joints[0]
-        if jt is None:
-            continue
+        jt = _get_joint(body_map[jname], jname)
         if "damping" in attrs:
             jt.set("damping", _fmt_xml(attrs["damping"]))
         if "frictionloss" in attrs:
@@ -262,8 +203,6 @@ def export_xml(
         if "armature" in attrs:
             jt.set("armature", _fmt_xml(attrs["armature"]))
         applied += 1
-        if verbose:
-            logger.info("XML joint '%s' dynamics updated", jname)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     tree.write(str(out), xml_declaration=True, encoding="utf-8")
@@ -339,54 +278,32 @@ def export_urdf_dynamics(
 
     applied = 0
 
-    for jname in set(mass) | set(moments) | set(inertia):
-        lk = joint_child.get(jname)
-        if lk is None:
-            logger.warning("URDF joint '%s' (child link) not found, skipping",
-                           jname)
-            continue
+    for jname in set(mass):
+        lk = joint_child[jname]
         ine = _get_or_create(lk, "inertial")
-        m_el = _get_or_create(ine, "mass")
-        m = mass.get(jname)
-        if m is None:
-            m = _parse_float(m_el.get("value", 0.0))
-        else:
-            m_el.set("value", _fmt_xml(m))
 
+        m = mass[jname]
+        _get_or_create(ine, "mass").set("value", _fmt_xml(m))
+
+        mx, my, mz = moments[jname]
+        com = np.array([mx / m, my / m, mz / m])
         origin = _get_or_create(ine, "origin")
-        if jname in moments and m and m != 0:
-            mx, my, mz = moments[jname]
-            com = np.array([mx / m, my / m, mz / m])
-            origin.set("xyz", " ".join(_fmt_xml(x) for x in com))
-        else:
-            cur = [float(x) for x in origin.get("xyz", "0 0 0").split()]
-            while len(cur) < 3:
-                cur.append(0.0)
-            com = np.array(cur[:3])
+        origin.set("xyz", " ".join(_fmt_xml(x) for x in com))
+        origin.set("rpy", "0 0 0")
 
-        if jname in inertia:
-            I_O = inertia[jname]
-            c = com
-            I_C = I_O - m * (float(c @ c) * np.eye(3) - np.outer(c, c))
-            origin.set("rpy", "0 0 0")
-            i_el = _get_or_create(ine, "inertia")
-            i_el.set("ixx", _fmt_xml(I_C[0, 0]))
-            i_el.set("ixy", _fmt_xml(I_C[0, 1]))
-            i_el.set("ixz", _fmt_xml(I_C[0, 2]))
-            i_el.set("iyy", _fmt_xml(I_C[1, 1]))
-            i_el.set("iyz", _fmt_xml(I_C[1, 2]))
-            i_el.set("izz", _fmt_xml(I_C[2, 2]))
+        I_O = inertia[jname]
+        I_C = I_O - m * (float(com @ com) * np.eye(3) - np.outer(com, com))
+        i_el = _get_or_create(ine, "inertia")
+        i_el.set("ixx", _fmt_xml(I_C[0, 0]))
+        i_el.set("ixy", _fmt_xml(I_C[0, 1]))
+        i_el.set("ixz", _fmt_xml(I_C[0, 2]))
+        i_el.set("iyy", _fmt_xml(I_C[1, 1]))
+        i_el.set("iyz", _fmt_xml(I_C[1, 2]))
+        i_el.set("izz", _fmt_xml(I_C[2, 2]))
         applied += 1
-        if verbose:
-            logger.info("URDF link '%s' (joint '%s') inertial updated",
-                        lk.get("name"), jname)
 
     for jname, attrs in friction.items():
-        jt = joint_elem.get(jname)
-        if jt is None:
-            logger.warning("URDF joint '%s' not found, skipping", jname)
-            continue
-        dyn = _get_or_create(jt, "dynamics")
+        dyn = _get_or_create(joint_elem[jname], "dynamics")
         for attr, v in attrs.items():
             dyn.set(attr, _fmt_xml(v))
         applied += 1
