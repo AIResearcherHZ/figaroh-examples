@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 DATA_DIR = "data/calibration"
 URDF_STEM = "ur10_robot"  # stem for discovering modified URDFs
 # 默认 MJCF 模型(与 replay_mujoco.py 一致)
-XML_PATH = "../../models/ur_description/ur10e.xml"
+XML_PATH = "../../models/ur_description/ur10.xml"
 
 
 # ── MJCF(XML)导出 ──────────────────────────────────────────────────

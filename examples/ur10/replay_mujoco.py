@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="MuJoCo 回放 UR10 轨迹")
     ap.add_argument(
         "--model",
-        default="../../models/ur_description/ur10e.xml",
+        default="../../models/ur_description/ur10.xml",
         help="MJCF 模型路径",
     )
     ap.add_argument(
